@@ -1,0 +1,15 @@
+print("--- Classes ---");
+class Dog {
+    fn init(name, breed) {
+        this.name = name;
+        this.breed = breed;
+    }
+
+    fn bark() {
+        print(this.name + " says: Woof!");
+    }
+}
+
+let myDog = Dog("Rex", "German Shepherd");
+myDog.bark();
+print("done");

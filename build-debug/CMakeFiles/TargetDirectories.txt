@@ -1,0 +1,3 @@
+/home/nohat1337/c++-fork/build-debug/CMakeFiles/forge.dir
+/home/nohat1337/c++-fork/build-debug/CMakeFiles/edit_cache.dir
+/home/nohat1337/c++-fork/build-debug/CMakeFiles/rebuild_cache.dir

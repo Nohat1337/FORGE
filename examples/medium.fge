@@ -1,0 +1,23 @@
+let x = 42;
+print("x = " + str(x));
+
+let a = 10;
+let b = 3;
+print("a + b = " + str(a + b));
+print("a - b = " + str(a - b));
+print("a * b = " + str(a * b));
+
+fn add(a, b) {
+    return a + b;
+}
+print("add(10, 20) = " + str(add(10, 20)));
+
+for (let i = 0; i < 5; i = i + 1) {
+    print(i);
+}
+
+if (x > 30) {
+    print("x is big");
+} else {
+    print("x is small");
+}

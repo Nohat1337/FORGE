@@ -1,0 +1,25 @@
+class Dog {
+    fn init(name) {
+        this.name = name;
+    }
+
+    fn bark() {
+        print(this.name + " says: Woof!");
+    }
+}
+
+let myDog = Dog("Rex");
+myDog.bark();
+
+class Puppy extends Dog {
+    fn init(name) {
+        this.name = name;
+    }
+
+    fn play() {
+        print(this.name + " is playing!");
+    }
+}
+
+let myPuppy = Puppy("Max");
+myPuppy.play();

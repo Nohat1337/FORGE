@@ -1,0 +1,208 @@
+print("=== Forge Language v2.1 Feature Tests ===");
+print("");
+
+// --- Maps ---
+print("--- Maps ---");
+
+// Basic map creation and access
+let m = { "name": "Forge", "version": 2 };
+print("Map: " + str(m));
+print("m[\"name\"]: " + m["name"]);
+print("m[\"version\"]: " + str(m["version"]));
+print("len(m): " + str(len(m)));
+
+// has()
+print("has(m, \"name\"): " + str(has(m, "name")));
+print("has(m, \"missing\"): " + str(has(m, "missing")));
+
+// Modification
+m["year"] = 2026;
+print("After add year, len: " + str(len(m)));
+print("m[\"year\"]: " + str(m["year"]));
+
+// keys, values, entries
+print("keys(m): " + str(keys(m)));
+print("values(m): " + str(values(m)));
+print("entries(m): " + str(entries(m)));
+
+// clone
+let m2 = clone(m);
+print("clone len: " + str(len(m2)));
+m2["new"] = true;
+print("original len after clone mod: " + str(len(m)));
+
+// Nested map access
+let nested = { "a": { "b": 42 } };
+print("nested: " + str(nested));
+
+// Map with all value types
+let mixed = { "int": 10, "float": 3.14, "bool": true, "str": "hi" };
+print("mixed keys: " + str(keys(mixed)));
+
+// Empty map
+let empty = {};
+print("empty len: " + str(len(empty)));
+
+// Map in loops
+let scores = { "alice": 95, "bob": 87, "charlie": 92 };
+let total = 0;
+for (let name in keys(scores)) {
+    total = total + scores[name];
+}
+print("Total scores: " + str(total));
+
+print("");
+
+// --- String Methods ---
+print("--- String Methods ---");
+
+let s = "  Hello, World!  ";
+
+// upper / lower
+print("upper: " + upper(s));
+print("lower: " + lower(s));
+
+// trim
+print("trim: " + trim(s));
+
+// split
+print("split comma: " + str(split("a,b,c", ",")));
+print("split empty: " + str(split("hello", "")));
+
+// contains
+print("contains world: " + str(contains("hello world", "world")));
+print("contains xyz: " + str(contains("hello world", "xyz")));
+
+// replace
+print("replace: " + replace("hello world", "world", "forge"));
+
+// substring
+print("substring(1,4): " + substring("hello", 1, 4));
+print("substring(2): " + substring("hello", 2));
+
+// charAt
+print("charAt(0): " + charAt("hello", 0));
+print("charAt(4): " + charAt("hello", 4));
+
+// parseInt / toFloat
+print("parseInt: " + str(parseInt("42")));
+print("toFloat: " + str(toFloat("3.14")));
+
+// Chained string operations
+let result = upper(trim("  test  "));
+print("chained: " + result);
+
+// String in expressions
+let greeting = "Hello, " + upper("forge") + "!";
+print("greeting: " + greeting);
+
+print("");
+
+// --- Math Builtins ---
+print("--- Math Builtins ---");
+
+print("abs(-5): " + str(abs(-5)));
+print("abs(3.14): " + str(abs(3.14)));
+print("min(3, 7): " + str(min(3, 7)));
+print("max(3, 7): " + str(max(3, 7)));
+print("sqrt(16): " + str(sqrt(16)));
+print("pow(2, 10): " + str(pow(2, 10)));
+print("floor(3.7): " + str(floor(3.7)));
+print("ceil(3.2): " + str(ceil(3.2)));
+print("round(3.5): " + str(round(3.5)));
+
+// random range test
+let r = randomInt(1, 100);
+print("randomInt(1,100) in range: " + str(r >= 1 and r <= 100));
+
+// Math in expressions
+let area = 3.14 * pow(5, 2);
+print("area of circle r=5: " + str(area));
+
+// floor/ceil for integer division alternative
+print("floor(7/2): " + str(floor(7 / 2)));
+print("ceil(7/2): " + str(ceil(7 / 2)));
+print("ceil(7.0/2.0): " + str(ceil(7.0 / 2.0)));
+
+print("");
+
+// --- Integration Tests ---
+print("--- Integration ---");
+
+// Map + closures
+fn make_counter_map() {
+    let data = { "count": 0 };
+    return fn() {
+        data["count"] = data["count"] + 1;
+        return data["count"];
+    };
+}
+
+let counter = make_counter_map();
+print("counter: " + str(counter()));
+print("counter: " + str(counter()));
+print("counter: " + str(counter()));
+
+// Class with map storage
+class Student {
+    fn init(name, grades) {
+        this.name = name;
+        this.grades = grades;
+    }
+
+    fn average() {
+        let total = 0;
+        for (let g in this.grades) {
+            total = total + g;
+        }
+        return total / len(this.grades);
+    }
+
+    fn info() {
+        print(this.name + " avg: " + str(this.average()));
+    }
+}
+
+let alice = Student("Alice", [90, 85, 95]);
+alice.info();
+
+// Map in class
+class Config {
+    fn init() {
+        this.settings = { "debug": false, "verbose": true, "level": 5 };
+    }
+
+    fn get(key) {
+        return this.settings[key];
+    }
+
+    fn set(key, val) {
+        this.settings[key] = val;
+    }
+
+    fn show() {
+        print("Config: " + str(this.settings));
+    }
+}
+
+let cfg = Config();
+cfg.show();
+cfg.set("debug", true);
+print("debug after set: " + str(cfg.get("debug")));
+
+// String methods with maps
+let words = split("the quick brown fox jumps over the lazy dog", " ");
+let wordMap = { "total": len(words) };
+print("word count: " + str(wordMap["total"]));
+print("first word: " + upper(words[0]));
+
+// Try/catch with map access
+try {
+    let bad = { "key": "val" };
+    print(bad["nonexistent"]);
+} catch (e) {
+    print("Caught: " + str(e));
+}
+
+print("");
+print("=== All v2.1 tests passed! ===");

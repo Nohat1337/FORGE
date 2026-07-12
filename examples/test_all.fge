@@ -1,0 +1,180 @@
+print("=== Forge Language v2.0 Test Suite ===");
+print("");
+
+// 1. Variables and arithmetic
+print("--- Variables & Arithmetic ---");
+let x = 42;
+const pi = 3.14159;
+let name = "Forge";
+print("x = " + str(x));
+print("pi = " + str(pi));
+print("name = " + name);
+
+let a = 10;
+let b = 3;
+print("a + b = " + str(a + b));
+print("a - b = " + str(a - b));
+print("a * b = " + str(a * b));
+print("a / b = " + str(a / b));
+print("a % b = " + str(a % b));
+
+// 2. Boolean logic
+print("");
+print("--- Booleans ---");
+let isBig = x > 30;
+print("x > 30: " + str(isBig));
+print("equal: " + str(5 == 5));
+print("not equal: " + str(5 != 3));
+
+// 3. If/else
+print("");
+print("--- If/Else ---");
+if (x > 50) {
+    print("x is big");
+} else {
+    print("x is small");
+}
+
+// 4. Functions
+print("");
+print("--- Functions ---");
+fn add(a, b) {
+    return a + b;
+}
+
+fn factorial(n) {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+print("add(10, 20) = " + str(add(10, 20)));
+print("5! = " + str(factorial(5)));
+
+// 5. For loop
+print("");
+print("--- For Loop ---");
+for (let i = 1; i <= 5; i = i + 1) {
+    print(i);
+}
+
+// 6. While loop
+print("");
+print("--- While Loop ---");
+let countdown = 5;
+while (countdown > 0) {
+    print(countdown);
+    countdown = countdown - 1;
+}
+print("Liftoff!");
+
+// 7. Arrays
+print("");
+print("--- Arrays ---");
+let numbers = [10, 20, 30, 40, 50];
+print("Array: " + str(numbers));
+print("First: " + str(numbers[0]));
+print("Third: " + str(numbers[2]));
+print("Length: " + str(len(numbers)));
+
+// 8. Classes
+print("");
+print("--- Classes ---");
+class Dog {
+    fn init(name, breed) {
+        this.name = name;
+        this.breed = breed;
+    }
+
+    fn bark() {
+        print(this.name + " says: Woof!");
+    }
+
+    fn info() {
+        print(this.name + " is a " + this.breed);
+    }
+}
+
+let myDog = Dog("Rex", "German Shepherd");
+myDog.bark();
+myDog.info();
+
+// 9. Inheritance
+print("");
+print("--- Inheritance ---");
+class Puppy extends Dog {
+    fn init(name) {
+        this.name = name;
+        this.breed = "Unknown puppy";
+    }
+
+    fn play() {
+        print(this.name + " is playing!");
+    }
+}
+
+let myPuppy = Puppy("Max");
+myPuppy.bark();
+myPuppy.play();
+
+// 10. Ternary operator
+print("");
+print("--- Ternary ---");
+let age = 20;
+let status = age >= 18 ? "adult" : "minor";
+print("You are an " + status);
+
+// 11. Match expression
+print("");
+print("--- Match ---");
+let day = 3;
+let dayName = match day {
+    case 1: "Monday"
+    case 2: "Tuesday"
+    case 3: "Wednesday"
+    case _: "Another day"
+};
+print("Day " + str(day) + " is " + dayName);
+
+// 12. Closures
+print("");
+print("--- Closures ---");
+fn make_counter() {
+    let count = 0;
+    return fn() {
+        count = count + 1;
+        return count;
+    };
+}
+
+let counter = make_counter();
+print("Counter: " + str(counter()));
+print("Counter: " + str(counter()));
+print("Counter: " + str(counter()));
+
+// 13. Higher-order functions
+print("");
+print("--- Higher-Order Functions ---");
+fn apply(f, x) {
+    return f(x);
+}
+
+fn double(x) {
+    return x * 2;
+}
+
+print("double(5) = " + str(apply(double, 5)));
+
+// 14. Error handling
+print("");
+print("--- Try/Catch ---");
+try {
+    let result = 10 / 0;
+    print("Result: " + str(result));
+} catch (e) {
+    print("Caught error: " + str(e));
+}
+
+print("");
+print("=== All tests passed! ===");
