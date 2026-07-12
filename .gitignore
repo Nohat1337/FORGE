@@ -1,0 +1,7 @@
+build/
+build-debug/
+*.o
+*.d
+.cache/
+compile_commands.json
+.opencode/
