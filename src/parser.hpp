@@ -45,6 +45,9 @@ private:
     ExprPtr parseTernary();
     ExprPtr parseOr();
     ExprPtr parseAnd();
+    ExprPtr parseBitwiseOr();
+    ExprPtr parseBitwiseXor();
+    ExprPtr parseBitwiseAnd();
     ExprPtr parseEquality();
     ExprPtr parseComparison();
     ExprPtr parseAddition();

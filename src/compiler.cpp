@@ -597,6 +597,9 @@ void Compiler::compileBinary(BinaryExpr& e) {
         case TokenType::STAR: emitOp(OP_MULTIPLY); break;
         case TokenType::SLASH: emitOp(OP_DIVIDE); break;
         case TokenType::PERCENT: emitOp(OP_MODULO); break;
+        case TokenType::AMPERSAND: emitOp(OP_BITWISE_AND); break;
+        case TokenType::BAR: emitOp(OP_BITWISE_OR); break;
+        case TokenType::CARET: emitOp(OP_BITWISE_XOR); break;
         case TokenType::EQUAL_EQUAL: emitOp(OP_EQUAL); break;
         case TokenType::BANG_EQUAL: emitOp(OP_NOT_EQUAL); break;
         case TokenType::LESS: emitOp(OP_LESS); break;

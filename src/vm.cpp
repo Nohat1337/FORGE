@@ -710,6 +710,33 @@ bool VM::interpret(std::shared_ptr<ObjFunction> function) {
                     } else { if (!handleError("Invalid operands for '%'")) return false; break; }
                     break;
                 }
+                case OP_BITWISE_AND: {
+                    Value b = pop(); Value a = pop();
+                    if (a.isNumber() && b.isNumber()) {
+                        if (a.type == ValueType::VAL_INT && b.type == ValueType::VAL_INT)
+                            push(Value::integer(a.as.integer & b.as.integer));
+                        else { if (!handleError("Bitwise AND requires integer operands")) return false; break; }
+                    } else { if (!handleError("Invalid operands for '&'")) return false; break; }
+                    break;
+                }
+                case OP_BITWISE_OR: {
+                    Value b = pop(); Value a = pop();
+                    if (a.isNumber() && b.isNumber()) {
+                        if (a.type == ValueType::VAL_INT && b.type == ValueType::VAL_INT)
+                            push(Value::integer(a.as.integer | b.as.integer));
+                        else { if (!handleError("Bitwise OR requires integer operands")) return false; break; }
+                    } else { if (!handleError("Invalid operands for '|'")) return false; break; }
+                    break;
+                }
+                case OP_BITWISE_XOR: {
+                    Value b = pop(); Value a = pop();
+                    if (a.isNumber() && b.isNumber()) {
+                        if (a.type == ValueType::VAL_INT && b.type == ValueType::VAL_INT)
+                            push(Value::integer(a.as.integer ^ b.as.integer));
+                        else { if (!handleError("Bitwise XOR requires integer operands")) return false; break; }
+                    } else { if (!handleError("Invalid operands for '^'")) return false; break; }
+                    break;
+                }
                 case OP_NEGATE: {
                     Value a = pop();
                     if (a.isNumber()) {

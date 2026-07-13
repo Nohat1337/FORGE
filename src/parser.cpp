@@ -310,15 +310,6 @@ ExprPtr Parser::parseOr() {
     return left;
 }
 
-ExprPtr Parser::parseAnd() {
-    ExprPtr left = parseEquality();
-    while (check(TokenType::AND)) {
-        Token op = advance();
-        left = makeExpr(BinaryExpr{left, op, parseEquality()});
-    }
-    return left;
-}
-
 ExprPtr Parser::parseEquality() {
     ExprPtr left = parseComparison();
     while (check(TokenType::EQUAL_EQUAL) || check(TokenType::BANG_EQUAL)) {
@@ -328,7 +319,42 @@ ExprPtr Parser::parseEquality() {
     return left;
 }
 
-ExprPtr Parser::parseComparison() {
+ExprPtr Parser::parseBitwiseAnd() {
+    ExprPtr left = parseEquality();
+    while (check(TokenType::AMPERSAND)) {
+        Token op = advance();
+        left = makeExpr(BinaryExpr{left, op, parseEquality()});
+    }
+    return left;
+}
+
+ExprPtr Parser::parseBitwiseXor() {
+    ExprPtr left = parseBitwiseAnd();
+    while (check(TokenType::CARET)) {
+        Token op = advance();
+        left = makeExpr(BinaryExpr{left, op, parseBitwiseAnd()});
+    }
+    return left;
+}
+
+ExprPtr Parser::parseBitwiseOr() {
+    ExprPtr left = parseBitwiseXor();
+    while (check(TokenType::BAR)) {
+        Token op = advance();
+        left = makeExpr(BinaryExpr{left, op, parseBitwiseXor()});
+    }
+    return left;
+}
+
+ExprPtr Parser::parseAnd() {
+    ExprPtr left = parseBitwiseOr();
+    while (check(TokenType::AND)) {
+        Token op = advance();
+        left = makeExpr(BinaryExpr{left, op, parseBitwiseOr()});
+    }
+    return left;
+}
+    ExprPtr Parser::parseComparison() {
     ExprPtr left = parseAddition();
     while (check(TokenType::LESS) || check(TokenType::LESS_EQUAL) || check(TokenType::GREATER) || check(TokenType::GREATER_EQUAL)) {
         Token op = advance();

@@ -49,6 +49,44 @@ Token Lexer::readNumber() {
     int startCol = column_;
     std::string num;
     bool isFloat = false;
+    bool isHex = false;
+    bool isBinary = false;
+    
+    // Check for hex (0x) or binary (0b) prefix
+    if (peek() == '0' && pos_ + 1 < (int)source_.size()) {
+        char next = peekNext();
+        if (next == 'x' || next == 'X') {
+            isHex = true;
+            num += advance(); // '0'
+            num += advance(); // 'x' or 'X'
+        } else if (next == 'b' || next == 'B') {
+            isBinary = true;
+            num += advance(); // '0'
+            num += advance(); // 'b' or 'B'
+        }
+    }
+    
+    if (isHex) {
+        while (pos_ < (int)source_.size() && std::isxdigit(peek())) num += advance();
+        Token tok;
+        tok.type = TokenType::INTEGER;
+        tok.value = num;
+        tok.line = line_;
+        tok.column = startCol;
+        return tok;
+    }
+    
+    if (isBinary) {
+        while (pos_ < (int)source_.size() && (peek() == '0' || peek() == '1')) num += advance();
+        Token tok;
+        tok.type = TokenType::INTEGER;
+        tok.value = num;
+        tok.line = line_;
+        tok.column = startCol;
+        return tok;
+    }
+    
+    // Regular decimal/float parsing
     while (pos_ < (int)source_.size() && std::isdigit(peek())) num += advance();
     if (peek() == '.' && std::isdigit(peekNext())) {
         isFloat = true;
@@ -57,7 +95,9 @@ Token Lexer::readNumber() {
     }
     Token tok;
     tok.type = isFloat ? TokenType::FLOAT : TokenType::INTEGER;
-    tok.value = num; tok.line = line_; tok.column = startCol;
+    tok.value = num;
+    tok.line = line_;
+    tok.column = startCol;
     return tok;
 }
 
@@ -137,20 +177,44 @@ void Lexer::readChar(std::vector<Token>& tokens) {
     int startCol = column_;
     int startLine = line_;
     advance(); // skip opening '
-    char c = advance();
-    if (c == '\\') {
-        c = advance();
+    
+    // Read UTF-8 character
+    std::string charStr;
+    char first = advance();
+    charStr += first;
+    
+    // Check if it's a multi-byte UTF-8 character
+    unsigned char firstByte = static_cast<unsigned char>(charStr[0]);
+    int expectedBytes = 1;
+    if ((firstByte & 0x80) != 0) {
+        if ((firstByte & 0xE0) == 0xC0) expectedBytes = 2;
+        else if ((firstByte & 0xF0) == 0xE0) expectedBytes = 3;
+        else if ((firstByte & 0xF8) == 0xF0) expectedBytes = 4;
+        
+        for (int i = 1; i < expectedBytes; i++) {
+            if (pos_ < (int)source_.size()) {
+                charStr += advance();
+            }
+        }
+    }
+    
+    // Handle escape sequences for single-byte chars
+    if (charStr.size() == 1 && charStr[0] == '\\') {
+        char c = advance();
         switch (c) {
-            case 'n': c = '\n'; break; case 't': c = '\t'; break;
-            case '\\': c = '\\'; break; case '\'': c = '\''; break;
-            case '0': c = '\0'; break;
+            case 'n': charStr = "\n"; break;
+            case 't': charStr = "\t"; break;
+            case '\\': charStr = "\\"; break;
+            case '\'': charStr = "'"; break;
+            case '0': charStr = "\0"; break;
             default: break;
         }
     }
+    
     if (pos_ >= (int)source_.size() || peek() != '\'')
         throw std::runtime_error("Unterminated character literal at line " + std::to_string(startLine));
     advance(); // skip closing '
-    tokens.push_back({TokenType::CHAR, std::string(1, c), startLine, startCol});
+    tokens.push_back({TokenType::CHAR, charStr, startLine, startCol});
 }
 
 Token Lexer::readIdentifier() {
@@ -199,6 +263,9 @@ std::vector<Token> Lexer::tokenize() {
                 case ']': advance(); tokens.push_back({TokenType::RBRACKET,"]",line_,startCol}); break;
                 case ';': advance(); tokens.push_back({TokenType::SEMICOLON,";",line_,startCol}); break;
                 case ':': advance(); tokens.push_back({TokenType::COLON,":",line_,startCol}); break;
+                case '&': advance(); if (peek()=='&') { advance(); tokens.push_back({TokenType::AND,"&&",line_,startCol}); } else { tokens.push_back({TokenType::AMPERSAND,"&",line_,startCol}); } break;
+                case '|': advance(); if (peek()=='|') { advance(); tokens.push_back({TokenType::OR,"||",line_,startCol}); } else { tokens.push_back({TokenType::BAR,"|",line_,startCol}); } break;
+                case '^': advance(); tokens.push_back({TokenType::CARET,"^",line_,startCol}); break;
                 case ',': advance(); tokens.push_back({TokenType::COMMA,",",line_,startCol}); break;
                 case '.': advance(); tokens.push_back({TokenType::DOT,".",line_,startCol}); break;
                 case '?': advance(); tokens.push_back({TokenType::QUESTION,"?",line_,startCol}); break;
