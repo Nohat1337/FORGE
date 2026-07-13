@@ -12,6 +12,7 @@ add_executable(forge
     src/chunk.cpp
     src/compiler.cpp
     src/vm.cpp
+    src/optimizer.cpp
 )
 
 target_include_directories(forge PRIVATE src)
@@ -19,3 +20,5 @@ target_include_directories(forge PRIVATE src)
 if(UNIX AND NOT APPLE)
     target_link_libraries(forge PRIVATE dl)
 endif()
+
+add_subdirectory(tools)

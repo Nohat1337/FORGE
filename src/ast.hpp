@@ -84,9 +84,15 @@ struct StringInterpExpr {
 };
 
 struct MatchPattern {
-    enum Type { LITERAL, IDENTIFIER, WILDCARD } type;
+    enum Type { LITERAL, IDENTIFIER, WILDCARD, RANGE, GUARD, ARRAY_DESTRUCTURE } type;
     ExprPtr literal;
     std::string name;
+    ExprPtr rangeLow;
+    ExprPtr rangeHigh;
+    ExprPtr guardCondition;
+    std::vector<MatchPattern> elements;
+    bool hasRest = false;
+    std::string restName;
 };
 
 struct MatchCase {
@@ -100,6 +106,10 @@ struct MatchExpr {
 };
 
 struct ThrowExpr {
+    ExprPtr value;
+};
+
+struct YieldExpr {
     ExprPtr value;
 };
 
@@ -125,7 +135,7 @@ struct Expr {
         IntegerLiteral, FloatLiteral, StringLiteral, BoolLiteral, NilLiteral,
         ThisLiteral, Identifier, BinaryExpr, UnaryExpr, TernaryExpr,
         CallExpr, IndexExpr, MemberExpr, ArrayLiteral, MapLiteral, FnExpr,
-        SuperExpr, StringInterpExpr, MatchExpr, ThrowExpr,
+        SuperExpr, StringInterpExpr, MatchExpr, ThrowExpr, YieldExpr,
         AssignExpr, AssignMemberExpr, AssignIndexExpr
     >;
     Variant node;
@@ -168,6 +178,12 @@ struct FnDecl {
     std::vector<StmtPtr> body;
 };
 
+struct GenDecl {
+    std::string name;
+    std::vector<std::string> params;
+    std::vector<StmtPtr> body;
+};
+
 struct ClassDecl {
     std::string name;
     std::vector<FnDecl> methods;
@@ -186,10 +202,16 @@ struct ExternFnDecl {
     std::string library;
 };
 
+struct ImportStmt {
+    std::string moduleName;
+    std::string alias;
+    std::vector<std::string> selectiveImports;
+};
+
 struct Stmt {
     using Variant = std::variant<
         ExprStmt, VarDecl, ReturnStmt, IfStmt, WhileStmt,
-        ForStmt, ForInStmt, BlockStmt, FnDecl, ClassDecl, TryStmt, ExternFnDecl
+        ForStmt, ForInStmt, BlockStmt, FnDecl, GenDecl, ClassDecl, TryStmt, ExternFnDecl, ImportStmt
     >;
     Variant node;
     int line = 0;

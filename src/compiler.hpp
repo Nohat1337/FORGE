@@ -3,6 +3,7 @@
 #include "ast.hpp"
 #include "chunk.hpp"
 #include "value.hpp"
+#include "optimizer.hpp"
 #include <vector>
 #include <string>
 #include <memory>
@@ -71,6 +72,7 @@ private:
     void compileStatement(StmtPtr stmt);
     void compileVarDecl(VarDecl& decl);
     void compileFnDecl(FnDecl& decl);
+    void compileGenDecl(GenDecl& decl);
     void compileClassDecl(ClassDecl& decl);
     void compileReturn(ReturnStmt& stmt);
     void compileIf(IfStmt& stmt);
@@ -81,6 +83,7 @@ private:
     void compileTryCatch(TryStmt& stmt);
     void compileExprStmt(ExprStmt& stmt);
     void compileExternFn(ExternFnDecl& decl);
+    void compileImport(ImportStmt& decl);
 
     void compileExpression(ExprPtr expr);
     void compileIntegerLiteral(IntegerLiteral& e);
@@ -103,9 +106,13 @@ private:
     void compileStringInterp(StringInterpExpr& e);
     void compileMatchExpr(MatchExpr& e);
     void compileThrowExpr(ThrowExpr& e);
+    void compileYieldExpr(YieldExpr& e);
     void compileAssign(AssignExpr& e);
     void compileAssignMember(AssignMemberExpr& e);
     void compileAssignIndex(AssignIndexExpr& e);
+
+    bool isLiteralConstant(ExprPtr expr);
+    bool tryFoldBinary(BinaryExpr& e);
 
     void error(const std::string& msg);
 };

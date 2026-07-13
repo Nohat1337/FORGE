@@ -87,6 +87,8 @@ struct ObjFunction : Obj {
     struct Chunk* chunk = nullptr;
     int arity = 0;
     int upvalueCount = 0;
+    int localCount = 0;
+    bool isGenerator = false;
     std::string name;
     ObjFunction();
 };

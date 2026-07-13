@@ -35,6 +35,7 @@ StmtPtr Parser::parseStatement() {
     if (check(TokenType::LET)) { advance(); return parseVarDecl(false); }
     if (check(TokenType::CONST)) { advance(); return parseVarDecl(true); }
     if (check(TokenType::FN)) { advance(); return parseFnDecl(); }
+    if (check(TokenType::GEN)) { advance(); return parseGenDecl(); }
     if (check(TokenType::CLASS)) return parseClassDecl();
     if (check(TokenType::RETURN)) return parseReturn();
     if (check(TokenType::IF)) return parseIf();
@@ -43,6 +44,7 @@ StmtPtr Parser::parseStatement() {
     if (check(TokenType::LBRACE)) return parseBlock();
     if (check(TokenType::TRY)) return parseTryCatch();
     if (check(TokenType::EXTERN)) return parseExternFn();
+    if (check(TokenType::IMPORT)) return parseImport();
     return parseExprStmt();
 }
 
@@ -65,6 +67,43 @@ StmtPtr Parser::parseFnDecl() {
     expect(TokenType::RPAREN, "Expected ')'");
     auto body = std::get<BlockStmt>(parseBlock()->node).statements;
     return makeStmt(FnDecl{name.value, params, body});
+}
+
+StmtPtr Parser::parseGenDecl() {
+    Token name = expect(TokenType::IDENTIFIER, "Expected generator function name");
+    expect(TokenType::LPAREN, "Expected '(' after generator name");
+    std::vector<std::string> params;
+    if (!check(TokenType::RPAREN)) {
+        do { Token p = expect(TokenType::IDENTIFIER, "Expected parameter name"); params.push_back(p.value); }
+        while (match(TokenType::COMMA));
+    }
+    expect(TokenType::RPAREN, "Expected ')'");
+    expect(TokenType::LBRACE, "Expected '{'");
+    skipNewlines();
+    std::vector<StmtPtr> body;
+    while (!check(TokenType::RBRACE) && !check(TokenType::EOF_TOKEN)) {
+        body.push_back(parseStatement());
+        skipNewlines();
+    }
+    expect(TokenType::RBRACE, "Expected '}'");
+    return makeStmt(GenDecl{name.value, params, body});
+}
+
+StmtPtr Parser::parseImport() {
+    advance();
+    Token path = expect(TokenType::STRING_PART, "Expected module name");
+    std::string moduleName = path.value;
+    std::string alias;
+    if (match(TokenType::AS)) {
+        Token a = expect(TokenType::IDENTIFIER, "Expected alias name");
+        alias = a.value;
+    }
+    std::vector<std::string> selectiveImports;
+    ImportStmt stmt;
+    stmt.moduleName = moduleName;
+    stmt.alias = alias;
+    stmt.selectiveImports = selectiveImports;
+    return makeStmt(stmt);
 }
 
 StmtPtr Parser::parseReturn() {
@@ -222,7 +261,7 @@ StmtPtr Parser::parseExternFn() {
         while (match(TokenType::COMMA));
     }
     expect(TokenType::RPAREN, "Expected ')'");
-    expect(TokenType::STRING, "Expected library path");
+    expect(TokenType::STRING_PART, "Expected library path");
     Token lib = tokens_[pos_ - 1];
     skipNewlines();
     return makeStmt(ExternFnDecl{name.value, params, lib.value});
@@ -361,6 +400,14 @@ ExprPtr Parser::parsePrimary() {
     if (check(TokenType::IDENTIFIER)) { Token t = advance(); return makeExpr(Identifier{t.value}); }
     if (check(TokenType::MATCH)) return parseMatchExpr();
     if (check(TokenType::FN)) { advance(); return parseFnExpr(); }
+    if (check(TokenType::YIELD)) {
+        advance();
+        ExprPtr val = nullptr;
+        if (!check(TokenType::RBRACE) && !check(TokenType::NEWLINE) && !check(TokenType::SEMICOLON) && !check(TokenType::EOF_TOKEN)) {
+            val = parseExpression();
+        }
+        return makeExpr(YieldExpr{val});
+    }
     if (check(TokenType::LBRACKET)) return parseArray();
     if (check(TokenType::LBRACE)) return parseMap();
     if (check(TokenType::LPAREN)) {

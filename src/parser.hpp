@@ -28,6 +28,8 @@ private:
     StmtPtr parseStatement();
     StmtPtr parseVarDecl(bool isConst);
     StmtPtr parseFnDecl();
+    StmtPtr parseGenDecl();
+    StmtPtr parseImport();
     StmtPtr parseReturn();
     StmtPtr parseIf();
     StmtPtr parseWhile();

@@ -31,8 +31,14 @@ public:
     std::vector<Value> stack;
     std::vector<CallFrame> frames;
     std::unordered_map<std::string, Value> globals;
+    std::unordered_map<std::string, Value> modules_;
     int frameCount = 0;
     std::shared_ptr<ObjUpvalue> openUpvalues;
+
+    using DebugHook = std::function<bool(int line, const std::string& function, VM& vm)>;
+    void setDebugHook(DebugHook hook) { debugHook_ = hook; }
+    bool hasDebugHook() const { return debugHook_ != nullptr; }
+    DebugHook debugHook_;
 
 private:
     struct TryFrame {
@@ -56,6 +62,7 @@ private:
     Value invoke(ObjClass* klass, const std::string& name, int argCount);
 
     void defineBuiltins();
+    void defineModules();
     bool loadLibrary(const std::string& name, const std::string& funcName, int arity);
 
     std::shared_ptr<ObjUpvalue> captureUpvalue(Value* slot);

@@ -1,0 +1,8 @@
+import "test"
+test.describe("Variables and Arithmetic")
+test.assertEquals(1 + 1, 2, "basic addition")
+test.assertEquals(10 - 3, 7, "subtraction")
+test.assertEquals(4 * 5, 20, "multiplication")
+test.assertEquals(20 / 4, 5, "division")
+test.assertEquals(17 % 5, 2, "modulo")
+test.results()

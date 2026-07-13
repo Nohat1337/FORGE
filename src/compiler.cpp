@@ -1,6 +1,8 @@
 #include "compiler.hpp"
+#include "optimizer.hpp"
 #include <stdexcept>
 #include <iostream>
+#include <cmath>
 
 Compiler::Compiler() {}
 
@@ -147,9 +149,11 @@ void Compiler::compileStatement(StmtPtr stmt) {
         void operator()(ForInStmt& s) { c.compileForIn(s); }
         void operator()(BlockStmt& s) { c.compileBlock(s); }
         void operator()(FnDecl& s) { c.compileFnDecl(s); }
+        void operator()(GenDecl& s) { c.compileGenDecl(s); }
         void operator()(ClassDecl& s) { c.compileClassDecl(s); }
         void operator()(TryStmt& s) { c.compileTryCatch(s); }
         void operator()(ExternFnDecl& s) { c.compileExternFn(s); }
+        void operator()(ImportStmt& s) { c.compileImport(s); }
     };
     std::visit(Visitor{*this}, stmt->node);
 }
@@ -194,6 +198,47 @@ void Compiler::compileFnDecl(FnDecl& decl) {
         addLocal(decl.params[i], false);
     }
     compileStatements(decl.body);
+    emitOp(OP_NIL);
+    emitOp(OP_RETURN);
+    endScope();
+
+    auto* state = popCompiler();
+    auto compiledFn = state->function;
+    auto savedUpvalues = state->upvalues;
+    current_ = prev;
+
+    emitOpOperand16(OP_CLOSURE, addConstant(Value::obj(compiledFn)));
+    for (auto& uv : savedUpvalues) {
+        emitByte(uv.isLocal ? 1 : 0);
+        emitByte(uv.index);
+    }
+
+    if (current_->scopeDepth > 0) {
+        emitOpOperand16(OP_SET_LOCAL, (uint16_t)resolveLocal(decl.name));
+    } else {
+        emitOpOperand16(OP_DEFINE_GLOBAL, addConstant(Value::obj(std::make_shared<ObjString>(decl.name))));
+    }
+    delete state;
+}
+
+void Compiler::compileGenDecl(GenDecl& decl) {
+    auto fn = std::make_shared<ObjFunction>();
+    fn->name = decl.name;
+    fn->arity = (int)decl.params.size();
+    fn->isGenerator = true;
+
+    auto* prev = current_;
+    pushCompiler(fn);
+    current_->function->arity = fn->arity;
+    current_->function->name = decl.name;
+
+    beginScope();
+    current_->locals[0].name = "this";
+    for (int i = 0; i < (int)decl.params.size(); i++) {
+        addLocal(decl.params[i], false);
+    }
+    compileStatements(decl.body);
+    fn->localCount = (int)current_->locals.size();
     emitOp(OP_NIL);
     emitOp(OP_RETURN);
     endScope();
@@ -433,6 +478,20 @@ void Compiler::compileExternFn(ExternFnDecl& decl) {
     }
 }
 
+void Compiler::compileImport(ImportStmt& decl) {
+    auto nameObj = std::make_shared<ObjString>(decl.moduleName);
+    uint16_t nameIdx = addConstant(Value::obj(nameObj));
+    emitOpOperand16(OP_IMPORT, nameIdx);
+    emitByte(0);
+    emitByte(0);
+    if (current_->scopeDepth > 0) {
+        addLocal(decl.moduleName, false);
+        emitOpOperand16(OP_SET_LOCAL, (uint16_t)resolveLocal(decl.moduleName));
+    } else {
+        emitOpOperand16(OP_DEFINE_GLOBAL, nameIdx);
+    }
+}
+
 // ---- Expression Compilation ----
 
 void Compiler::compileExpression(ExprPtr expr) {
@@ -459,6 +518,7 @@ void Compiler::compileExpression(ExprPtr expr) {
         void operator()(StringInterpExpr& e) { c.compileStringInterp(e); }
         void operator()(MatchExpr& e) { c.compileMatchExpr(e); }
         void operator()(ThrowExpr& e) { c.compileThrowExpr(e); }
+        void operator()(YieldExpr& e) { c.compileYieldExpr(e); }
         void operator()(AssignExpr& e) { c.compileAssign(e); }
         void operator()(AssignMemberExpr& e) { c.compileAssignMember(e); }
         void operator()(AssignIndexExpr& e) { c.compileAssignIndex(e); }
@@ -509,6 +569,7 @@ void Compiler::compileIdentifier(Identifier& e) {
 }
 
 void Compiler::compileBinary(BinaryExpr& e) {
+    if (tryFoldBinary(e)) return;
     if (e.op.type == TokenType::AND) {
         compileExpression(e.left);
         int elseJump = emitJump(OP_JUMP_IF_FALSE);
@@ -718,6 +779,16 @@ void Compiler::compileThrowExpr(ThrowExpr& e) {
     emitOp(OP_THROW);
 }
 
+void Compiler::compileYieldExpr(YieldExpr& e) {
+    if (e.value) {
+        compileExpression(e.value);
+    } else {
+        emitOp(OP_NIL);
+    }
+    emitOp(OP_YIELD);
+    emitOp(OP_NIL);
+}
+
 void Compiler::compileAssign(AssignExpr& e) {
     int slot = resolveLocal(e.name);
     if (slot >= 0) {
@@ -755,6 +826,68 @@ void Compiler::compileAssignIndex(AssignIndexExpr& e) {
     emitOp(OP_SET_INDEX);
 }
 
+bool Compiler::isLiteralConstant(ExprPtr expr) {
+    if (!expr) return false;
+    return std::holds_alternative<IntegerLiteral>(expr->node) ||
+           std::holds_alternative<FloatLiteral>(expr->node) ||
+           std::holds_alternative<BoolLiteral>(expr->node) ||
+           std::holds_alternative<NilLiteral>(expr->node) ||
+           std::holds_alternative<StringLiteral>(expr->node);
+}
+
+bool Compiler::tryFoldBinary(BinaryExpr& e) {
+    if (!isLiteralConstant(e.left) || !isLiteralConstant(e.right)) return false;
+    if (std::holds_alternative<IntegerLiteral>(e.left->node) && std::holds_alternative<IntegerLiteral>(e.right->node)) {
+        long long a = std::get<IntegerLiteral>(e.left->node).value;
+        long long b = std::get<IntegerLiteral>(e.right->node).value;
+        long long result;
+        switch (e.op.type) {
+            case TokenType::PLUS: result = a + b; break;
+            case TokenType::MINUS: result = a - b; break;
+            case TokenType::STAR: result = a * b; break;
+            case TokenType::SLASH: if (b == 0) return false; result = a / b; break;
+            case TokenType::PERCENT: if (b == 0) return false; result = a % b; break;
+            case TokenType::EQUAL_EQUAL: emitConstant(Value::boolean(a == b)); return true;
+            case TokenType::BANG_EQUAL: emitConstant(Value::boolean(a != b)); return true;
+            case TokenType::LESS: emitConstant(Value::boolean(a < b)); return true;
+            case TokenType::LESS_EQUAL: emitConstant(Value::boolean(a <= b)); return true;
+            case TokenType::GREATER: emitConstant(Value::boolean(a > b)); return true;
+            case TokenType::GREATER_EQUAL: emitConstant(Value::boolean(a >= b)); return true;
+            default: return false;
+        }
+        emitConstant(Value::integer(result));
+        return true;
+    }
+    if (std::holds_alternative<FloatLiteral>(e.left->node) && std::holds_alternative<FloatLiteral>(e.right->node)) {
+        double a = std::get<FloatLiteral>(e.left->node).value;
+        double b = std::get<FloatLiteral>(e.right->node).value;
+        double result;
+        switch (e.op.type) {
+            case TokenType::PLUS: result = a + b; break;
+            case TokenType::MINUS: result = a - b; break;
+            case TokenType::STAR: result = a * b; break;
+            case TokenType::SLASH: if (b == 0.0) return false; result = a / b; break;
+            case TokenType::EQUAL_EQUAL: emitConstant(Value::boolean(a == b)); return true;
+            case TokenType::BANG_EQUAL: emitConstant(Value::boolean(a != b)); return true;
+            case TokenType::LESS: emitConstant(Value::boolean(a < b)); return true;
+            case TokenType::LESS_EQUAL: emitConstant(Value::boolean(a <= b)); return true;
+            case TokenType::GREATER: emitConstant(Value::boolean(a > b)); return true;
+            case TokenType::GREATER_EQUAL: emitConstant(Value::boolean(a >= b)); return true;
+            default: return false;
+        }
+        emitConstant(Value::floating(result));
+        return true;
+    }
+    if (e.op.type == TokenType::PLUS &&
+        std::holds_alternative<StringLiteral>(e.left->node) && std::holds_alternative<StringLiteral>(e.right->node)) {
+        auto& a = std::get<StringLiteral>(e.left->node).value;
+        auto& b = std::get<StringLiteral>(e.right->node).value;
+        emitConstant(Value::obj(std::make_shared<ObjString>(a + b)));
+        return true;
+    }
+    return false;
+}
+
 std::shared_ptr<ObjFunction> Compiler::compile(const std::vector<StmtPtr>& program) {
     hadError_ = false;
     errorMessage_.clear();
@@ -765,5 +898,6 @@ std::shared_ptr<ObjFunction> Compiler::compile(const std::vector<StmtPtr>& progr
     compileStatements(program);
     emitOp(OP_NIL);
     emitOp(OP_RETURN);
-    return popCompiler()->function;
+    auto result = popCompiler()->function;
+    return result;
 }

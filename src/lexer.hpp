@@ -12,7 +12,9 @@ enum class TokenType {
     CLASS, THIS, SUPER, EXTENDS,
     MATCH, CASE, WILDCARD,
     TRY, CATCH, THROW,
-    IMPORT, EXTERN,
+    IMPORT, EXTERN, AS, FROM,
+    GEN, YIELD,
+    DOTDOT,
     PLUS, MINUS, STAR, SLASH, PERCENT,
     EQUAL, EQUAL_EQUAL, BANG_EQUAL,
     LESS, LESS_EQUAL, GREATER, GREATER_EQUAL,
@@ -35,13 +37,11 @@ class Lexer {
 public:
     Lexer(const std::string& source);
     std::vector<Token> tokenize();
-
 private:
     std::string source_;
     int pos_;
     int line_;
     int column_;
-    static const std::unordered_map<std::string, TokenType> keywords_;
 
     char peek() const;
     char peekNext() const;
@@ -50,5 +50,8 @@ private:
     Token readNumber();
     void readString(std::vector<Token>& tokens);
     Token readIdentifier();
+
     Token makeToken(TokenType type, const std::string& value);
+
+    static const std::unordered_map<std::string, TokenType> keywords_;
 };

@@ -5,6 +5,8 @@
 #include <stdexcept>
 #include <random>
 #include <cctype>
+#include <fstream>
+#include <ctime>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -15,6 +17,7 @@
 VM::VM() {
     stack.reserve(STACK_MAX);
     defineBuiltins();
+    defineModules();
 }
 
 void VM::reset() {
@@ -378,6 +381,171 @@ void VM::defineBuiltins() {
     });
 }
 
+void VM::defineModules() {
+    {
+        auto testMod = std::make_shared<ObjMap>();
+        static int testPassed = 0, testFailed = 0;
+        static std::string currentDescribe;
+
+        auto assertFn = std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+            if (args.size() < 1 || args.size() > 2) throw std::runtime_error("assert() expects 1 or 2 arguments");
+            bool cond = args[0].isTruthy();
+            std::string msg = args.size() > 1 ? args[1].toString() : "assertion failed";
+            if (cond) {
+                testPassed++;
+                std::cout << "  [PASS] " << currentDescribe << " > " << msg << std::endl;
+            } else {
+                testFailed++;
+                std::cout << "  [FAIL] " << currentDescribe << " > " << msg << std::endl;
+            }
+            return Value::nil();
+        }, "assert");
+        testMod->entries["assert"] = Value::obj(assertFn);
+
+        auto assertEqualsFn = std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+            if (args.size() < 2 || args.size() > 3) throw std::runtime_error("assertEquals() expects 2 or 3 arguments");
+            bool eq = args[0].equals(args[1]);
+            std::string msg = args.size() > 2 ? args[2].toString() : "assertEquals failed";
+            if (eq) {
+                testPassed++;
+                std::cout << "  [PASS] " << currentDescribe << " > " << msg << std::endl;
+            } else {
+                testFailed++;
+                std::cout << "  [FAIL] " << currentDescribe << " > " << msg << std::endl;
+            }
+            return Value::nil();
+        }, "assertEquals");
+        testMod->entries["assertEquals"] = Value::obj(assertEqualsFn);
+
+        auto assertNotEqualsFn = std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+            if (args.size() < 2 || args.size() > 3) throw std::runtime_error("assertNotEquals() expects 2 or 3 arguments");
+            bool neq = !args[0].equals(args[1]);
+            std::string msg = args.size() > 2 ? args[2].toString() : "assertNotEquals failed";
+            if (neq) {
+                testPassed++;
+                std::cout << "  [PASS] " << currentDescribe << " > " << msg << std::endl;
+            } else {
+                testFailed++;
+                std::cout << "  [FAIL] " << currentDescribe << " > " << msg << std::endl;
+            }
+            return Value::nil();
+        }, "assertNotEquals");
+        testMod->entries["assertNotEquals"] = Value::obj(assertNotEqualsFn);
+
+        auto describeFn = std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+            if (args.size() != 1) throw std::runtime_error("describe() expects 1 argument");
+            if (!args[0].isString()) throw std::runtime_error("describe() expects a string");
+            if (testPassed > 0 || testFailed > 0) {
+                std::cout << "\nResults: " << testPassed << " passed, " << testFailed << " failed" << std::endl;
+            }
+            testPassed = 0;
+            testFailed = 0;
+            currentDescribe = args[0].asString()->value;
+            std::cout << "\n--- " << currentDescribe << " ---" << std::endl;
+            return Value::nil();
+        }, "describe");
+        testMod->entries["describe"] = Value::obj(describeFn);
+
+        auto resultsFn = std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+            if (testPassed > 0 || testFailed > 0) {
+                std::cout << "\nResults: " << testPassed << " passed, " << testFailed << " failed" << std::endl;
+            }
+            return Value::nil();
+        }, "results");
+        testMod->entries["results"] = Value::obj(resultsFn);
+
+        auto resetFn = std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+            testPassed = 0;
+            testFailed = 0;
+            currentDescribe = "";
+            return Value::nil();
+        }, "reset");
+        testMod->entries["reset"] = Value::obj(resetFn);
+
+        modules_["test"] = Value::obj(testMod);
+    }
+    {
+        auto ioMod = std::make_shared<ObjMap>();
+        ioMod->entries["write"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+            if (args.size() < 1 || args.size() > 2) throw std::runtime_error("io.write() expects 1 or 2 arguments");
+            std::string s = args[0].toString();
+            std::string dest = args.size() > 1 && args[1].isString() ? args[1].asString()->value : "stdout";
+            if (dest == "stdout") std::cout << s;
+            else if (dest == "stderr") std::cerr << s;
+            return Value::nil();
+        }, "io.write"));
+        ioMod->entries["read"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+            if (args.size() != 1) throw std::runtime_error("io.read() expects 1 argument");
+            std::string path = args[0].asString()->value;
+            std::ifstream file(path);
+            if (!file.is_open()) throw std::runtime_error("io.read() cannot open file: " + path);
+            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            return Value::obj(std::make_shared<ObjString>(content));
+        }, "io.read"));
+        modules_["io"] = Value::obj(ioMod);
+    }
+    {
+        auto osMod = std::make_shared<ObjMap>();
+        osMod->entries["time"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+            return Value::integer((long long)std::time(nullptr));
+        }, "os.time"));
+        osMod->entries["execute"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+            if (args.size() != 1) throw std::runtime_error("os.execute() expects 1 argument");
+            std::string cmd = args[0].asString()->value;
+            int result = std::system(cmd.c_str());
+            return Value::integer((long long)result);
+        }, "os.execute"));
+        modules_["os"] = Value::obj(osMod);
+    }
+    {
+        auto jsonMod = std::make_shared<ObjMap>();
+        jsonMod->entries["stringify"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+            if (args.size() != 1) throw std::runtime_error("json.stringify() expects 1 argument");
+            return Value::obj(std::make_shared<ObjString>(args[0].toString()));
+        }, "json.stringify"));
+        jsonMod->entries["parse"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+            if (args.size() != 1) throw std::runtime_error("json.parse() expects 1 argument");
+            return Value::nil();
+        }, "json.parse"));
+        modules_["json"] = Value::obj(jsonMod);
+    }
+    {
+        auto pathMod = std::make_shared<ObjMap>();
+        pathMod->entries["join"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+            if (args.size() < 1) throw std::runtime_error("path.join() expects at least 1 argument");
+            std::string result;
+            for (size_t i = 0; i < args.size(); i++) {
+                if (i > 0) result += "/";
+                result += args[i].asString()->value;
+            }
+            return Value::obj(std::make_shared<ObjString>(result));
+        }, "path.join"));
+        pathMod->entries["base"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+            if (args.size() != 1) throw std::runtime_error("path.base() expects 1 argument");
+            std::string p = args[0].asString()->value;
+            size_t pos = p.find_last_of("/\\");
+            return Value::obj(std::make_shared<ObjString>(pos != std::string::npos ? p.substr(pos + 1) : p));
+        }, "path.base"));
+        modules_["path"] = Value::obj(pathMod);
+    }
+    {
+        auto sysMod = std::make_shared<ObjMap>();
+        sysMod->entries["version"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+            return Value::obj(std::make_shared<ObjString>("2.0.0"));
+        }, "system.version"));
+        sysMod->entries["platform"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+#ifdef __linux__
+            return Value::obj(std::make_shared<ObjString>("linux"));
+#elif __APPLE__
+            return Value::obj(std::make_shared<ObjString>("darwin"));
+#else
+            return Value::obj(std::make_shared<ObjString>("unknown"));
+#endif
+        }, "system.platform"));
+        modules_["system"] = Value::obj(sysMod);
+    }
+}
+
 void VM::defineNative(const std::string& name, std::function<Value(const std::vector<Value>&)> fn, int arity) {
     globals[name] = Value::obj(std::make_shared<ObjNative>(fn, name));
 }
@@ -445,6 +613,14 @@ bool VM::interpret(std::shared_ptr<ObjFunction> function) {
         CallFrame& frame = frames[frameCount - 1];
 
         try {
+            if (hasDebugHook()) {
+                auto& chunk = frame.closure->function->chunk;
+                int offset = (int)(frame.ip - chunk->code.data()) - 1;
+                int line = (offset >= 0 && offset < (int)chunk->lines.size())
+                    ? chunk->lineAt(offset) : -1;
+                std::string fname = frame.closure->function->name;
+                debugHook_(line, fname, *this);
+            }
             uint8_t instruction = READ_BYTE();
             switch (instruction) {
                 case OP_CONSTANT: { push(READ_CONSTANT()); break; }
@@ -736,6 +912,11 @@ bool VM::interpret(std::shared_ptr<ObjFunction> function) {
                         if (mit != obj.asClass()->methods.end()) {
                             push(Value::obj(std::make_shared<ObjBoundMethod>(obj, mit->second.closure)));
                         } else { if (!handleError("Undefined method '" + name.asString()->value + "'")) return false; break; }
+                    } else if (obj.isMap()) {
+                        auto* m = obj.asMap();
+                        auto it = m->entries.find(name.asString()->value);
+                        if (it != m->entries.end()) { push(it->second); }
+                        else { if (!handleError("Undefined property '" + name.asString()->value + "'")) return false; break; }
                     } else { if (!handleError("Cannot access property on non-object")) return false; break; }
                     break;
                 }
@@ -808,7 +989,10 @@ bool VM::interpret(std::shared_ptr<ObjFunction> function) {
                     tryFrames.push_back({(int)stack.size(), frameCount, currentOffset + offset});
                     break;
                 }
-                case OP_END_TRY: { break; }
+                case OP_END_TRY: {
+                    if (!tryFrames.empty()) tryFrames.pop_back();
+                    break;
+                }
 
                 case OP_IMPORT: {
                     Value name = READ_CONSTANT();
@@ -816,10 +1000,18 @@ bool VM::interpret(std::shared_ptr<ObjFunction> function) {
                     (void)paramCount;
                     uint8_t libIdx = READ_BYTE();
                     (void)libIdx;
-                    auto native = std::make_shared<ObjNative>([name](const std::vector<Value>& args) -> Value {
-                        throw std::runtime_error("extern function '" + name.asString()->value + "' not linked");
-                    }, name.asString()->value);
-                    globals[name.asString()->value] = Value::obj(native);
+                    std::string modName = name.asString()->value;
+                    auto it = modules_.find(modName);
+                    if (it != modules_.end()) {
+                        globals[modName] = it->second;
+                        push(it->second);
+                    } else {
+                        auto native = std::make_shared<ObjNative>([modName](const std::vector<Value>& args) -> Value {
+                            throw std::runtime_error("module '" + modName + "' not found");
+                        }, modName);
+                        globals[modName] = Value::obj(native);
+                        push(globals[modName]);
+                    }
                     break;
                 }
 

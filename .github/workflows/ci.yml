@@ -1,0 +1,119 @@
+name: Forge CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake git
+        
+    - name: Configure
+      run: |
+        mkdir build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Debug
+        
+    - name: Build
+      run: |
+        cd build
+        make -j$(nproc)
+        
+    - name: Run tests
+      run: |
+        cd build
+        ./forge ../examples/test_all.fge
+        ./forge ../examples/test_v2_1.fge
+        
+    - name: Test tools
+      run: |
+        cd build
+        ./forge-format --help 2>&1 | head -1
+        ./forge-lint --help 2>&1 | head -1
+        ./forge-debug --help 2>&1 | head -1
+        
+    - name: Test IDE build
+      run: |
+        cd ide
+        mkdir -p build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release
+        make -j$(nproc)
+        ./forge-studio --version 2>&1 || true
+        
+  build-macos:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Build
+      run: |
+        mkdir build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release
+        make -j$(nproc)
+        ./forge ../examples/test_all.fge
+        
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Install dependencies
+      run: |
+        choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System'
+        
+    - name: Build
+      shell: cmd
+      run: |
+        mkdir build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64
+        cmake --build . --config Release
+        .\Release\forge.exe ..\examples\test_all.fge
+
+  release:
+    needs: [build-and-test, build-macos, build-windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Build release binaries
+      run: |
+        mkdir build-release
+        cd build-release
+        cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local
+        make -j$(nproc)
+        
+    - name: Create packages
+      run: |
+        chmod +x ./build_linux_package.sh
+        ./build_linux_package.sh
+        
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: forge-packages
+        path: |
+          forge-lang_*.deb
+          *.rpm
+          *.pkg.tar.zst
+          *.apk

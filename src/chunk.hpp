@@ -58,6 +58,9 @@ enum Op : uint8_t {
     OP_TRY,
     OP_END_TRY,
     OP_IMPORT,
+    OP_YIELD,
+    OP_NEXT,
+    OP_CREATE_GENERATOR,
     OP_EOF,
 };
 

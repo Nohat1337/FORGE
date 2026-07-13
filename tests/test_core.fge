@@ -1,0 +1,320 @@
+import "test"
+
+test.describe("Variables and Arithmetic")
+test.assertEquals(1 + 1, 2, "basic addition")
+test.assertEquals(10 - 3, 7, "subtraction")
+test.assertEquals(4 * 5, 20, "multiplication")
+test.assertEquals(20 / 4, 5, "division")
+test.assertEquals(17 % 5, 2, "modulo")
+test.assertEquals(-5 + 10, 5, "negation with addition")
+test.assert(3 > 2, "greater than")
+test.assert(2 < 3, "less than")
+test.assert(5 >= 5, "greater or equal")
+test.assert(3 <= 3, "less or equal")
+test.assertEquals(2 + 3 * 4, 14, "operator precedence")
+
+test.describe("String Operations")
+test.assertEquals(len("hello"), 5, "string length")
+test.assertEquals("hello" + " " + "world", "hello world", "string concatenation")
+test.assert(contains("hello world", "world"), "string contains")
+test.assertEquals(upper("hello"), "HELLO", "uppercase")
+test.assertEquals(lower("HELLO"), "hello", "lowercase")
+test.assertEquals(trim("  hi  "), "hi", "trim")
+test.assertEquals(substring("hello", 1, 4), "ell", "substring")
+test.assertEquals(replace("hello", "l", "r"), "herro", "replace")
+test.assert(split("a,b,c", ",") == ["a", "b", "c"], "split string")
+
+test.describe("Array Operations")
+let arr = [1, 2, 3, 4, 5]
+test.assertEquals(len(arr), 5, "array length")
+test.assertEquals(arr[0], 1, "array index 0")
+test.assertEquals(arr[4], 5, "array index 4")
+push(arr, 6)
+test.assertEquals(len(arr), 6, "push increases length")
+test.assertEquals(arr[5], 6, "pushed value")
+
+let arr2 = clone(arr)
+test.assertEquals(len(arr2), 6, "cloned array length")
+test.assert(arr2[0] == 1, "cloned array first element")
+
+test.describe("Map Operations")
+let m = {"name": "forge", "version": 2}
+test.assertEquals(len(m), 2, "map length")
+test.assertEquals(m["name"], "forge", "map access")
+test.assert(has(m, "name"), "map has key")
+test.assert(!has(m, "missing"), "map missing key")
+
+let k = keys(m)
+test.assertEquals(len(k), 2, "keys length")
+let v = values(m)
+test.assertEquals(len(v), 2, "values length")
+
+test.describe("Function Calls")
+fn add(a, b) {
+    return a + b
+}
+test.assertEquals(add(2, 3), 5, "function call")
+test.assertEquals(add(10, 20), 30, "function call 2")
+
+fn factorial(n) {
+    if (n <= 1) { return 1 }
+    return n * factorial(n - 1)
+}
+test.assertEquals(factorial(5), 120, "recursive factorial")
+test.assertEquals(factorial(1), 1, "factorial base case")
+
+test.describe("Closures")
+fn makeCounter() {
+    let count = 0
+    return fn() {
+        count = count + 1
+        return count
+    }
+}
+let counter = makeCounter()
+test.assertEquals(counter(), 1, "closure increment 1")
+test.assertEquals(counter(), 2, "closure increment 2")
+test.assertEquals(counter(), 3, "closure increment 3")
+
+fn makeAdder(x) {
+    return fn(y) { return x + y }
+}
+let add10 = makeAdder(10)
+test.assertEquals(add10(5), 15, "closure with parameter")
+
+test.describe("Class Inheritance")
+class Animal {
+    fn init(name) {
+        this.name = name
+    }
+    fn speak() {
+        return this.name + " makes a sound"
+    }
+}
+
+class Dog extends Animal {
+    fn init(name) {
+        this.name = name
+    }
+    fn speak() {
+        return this.name + " barks"
+    }
+}
+
+let d = Dog("Rex")
+test.assertEquals(d.speak(), "Rex barks", "method override")
+test.assertEquals(type(d), "instance", "Dog instance type")
+test.assert(d.name == "Rex", "Dog field access")
+
+test.describe("Error Handling")
+let caught = false
+try {
+    error("test error")
+} catch (e) {
+    caught = true
+    test.assertEquals(e, "test error", "catch error message")
+}
+test.assert(caught, "catch block executed")
+
+test.describe("Ternary Operator")
+test.assertEquals(1 > 0 ? "yes" : "no", "yes", "ternary true")
+test.assertEquals(1 < 0 ? "yes" : "no", "no", "ternary false")
+
+test.describe("Module Imports")
+import "io"
+test.assert(type(io) == "map", "io module is map")
+test.assert(has(io, "read"), "io has read")
+test.assert(has(io, "write"), "io has write")
+
+import "os"
+test.assert(type(os) == "map", "os module is map")
+test.assert(has(os, "time"), "os has time")
+test.assert(has(os, "execute"), "os has execute")
+
+import "json"
+test.assert(type(json) == "map", "json module is map")
+let j = json.stringify({"a": 1})
+test.assert(contains(j, "\"a\""), "json stringify")
+let parsed = json.parse("{\"x\": 42}")
+test.assertEquals(parsed["x"], 42, "json parse")
+
+import "path"
+test.assert(has(path, "join"), "path module has join")
+test.assert(has(path, "base"), "path module has base")
+
+import "system"
+test.assert(has(system, "version"), "system module has version")
+test.assert(has(system, "platform"), "system module has platform")
+
+test.describe("For Loops")
+let sum = 0
+for (let i = 1; i <= 10; i = i + 1) {
+    sum = sum + i
+}
+test.assertEquals(sum, 55, "for loop sum 1..10")
+
+test.describe("For-In Loops")
+let items = [10, 20, 30]
+let total = 0
+for (let x in items) {
+    total = total + x
+}
+test.assertEquals(total, 60, "for-in sum")
+
+test.describe("While Loops")
+let n = 0
+while (n < 5) {
+    n = n + 1
+}
+test.assertEquals(n, 5, "while loop count")
+
+test.describe("Constant Variables")
+const PI = 3.14159
+test.assert(PI > 3.14, "constant value access")
+
+test.describe("String Interpolation")
+let name = "Forge"
+let version = 2
+test.assert(contains("Hello " + name, "Hello Forge"), "string concat with variable")
+
+test.describe("Nil Handling")
+let x = nil
+test.assert(x == nil, "nil equality")
+test.assert(x != 42, "nil not equal to number")
+test.assert(!x, "nil is falsy")
+
+test.describe("Boolean Operations")
+test.assert(true and true, "logical and true")
+test.assert(not (true and false), "logical and false")
+test.assert(true or false, "logical or true")
+test.assert(not (not true), "logical not")
+
+test.describe("Nested Functions")
+fn outer() {
+    fn inner() {
+        return 42
+    }
+    return inner()
+}
+test.assertEquals(outer(), 42, "nested function call")
+
+test.describe("Multi-Return via Array")
+fn divmod(a, b) {
+    return [a / b, a % b]
+}
+let result = divmod(17, 5)
+test.assertEquals(result[0], 3, "divmod quotient")
+test.assertEquals(result[1], 2, "divmod remainder")
+
+test.describe("Switch-like Match")
+let day = 3
+let label = match day {
+    case 1: "Mon"
+    case 2: "Tue"
+    case 3: "Wed"
+    case 4: "Thu"
+    case 5: "Fri"
+    case _: "Weekend"
+}
+test.assertEquals(label, "Wed", "match expression")
+
+test.describe("String Indexing")
+let s = "hello"
+test.assertEquals(s[0], "h", "string index 0")
+test.assertEquals(s[4], "o", "string index 4")
+
+test.describe("Array of Maps")
+let u1 = {"name": "Alice", "age": 30}
+let u2 = {"name": "Bob", "age": 25}
+let users = [u1, u2]
+test.assertEquals(users[0]["name"], "Alice", "array of maps access")
+test.assertEquals(users[1]["age"], 25, "array of maps access 2")
+
+test.describe("Higher-Order Functions")
+fn apply(f, x) {
+    return f(x)
+}
+fn double(n) { return n * 2 }
+test.assertEquals(apply(double, 5), 10, "higher-order function")
+
+test.describe("Edge Cases")
+test.assertEquals(0 + 0, 0, "zero arithmetic")
+test.assertEquals("" + "", "", "empty string concat")
+test.assertEquals(len([]), 0, "empty array length")
+test.assert(!nil, "nil is falsy")
+test.assert(!false, "false is falsy")
+test.assert(true, "true is truthy")
+
+test.describe("Typed Array")
+let ta = array("int")
+push(ta, 1)
+push(ta, 2)
+push(ta, 3)
+test.assertEquals(len(ta), 3, "typed array length")
+test.assertEquals(ta[0], 1, "typed array access")
+
+test.describe("Generator")
+gen countTo(n) {
+    let i = 1
+    while (i <= n) {
+        yield i
+        i = i + 1
+    }
+}
+let mygen = countTo(3)
+let vals = [next(mygen), next(mygen), next(mygen)]
+test.assertEquals(vals[0], 1, "generator value 1")
+test.assertEquals(vals[1], 2, "generator value 2")
+test.assertEquals(vals[2], 3, "generator value 3")
+
+test.describe("Clone")
+let original = [1, 2, 3]
+let cloned = clone(original)
+push(cloned, 4)
+test.assertEquals(len(original), 3, "original unchanged after clone modify")
+test.assertEquals(len(cloned), 4, "cloned has extra element")
+
+let origMap = {"a": 1}
+let clonedMap = clone(origMap)
+clonedMap["b"] = 2
+test.assert(!has(origMap, "b"), "original map unchanged after clone modify")
+
+test.describe("Math Functions")
+test.assertEquals(abs(-5), 5, "absolute value")
+test.assertEquals(min(3, 7), 3, "minimum")
+test.assertEquals(max(3, 7), 7, "maximum")
+test.assertEquals(round(3.6), 4, "round")
+test.assertEquals(floor(3.7), 3, "floor")
+test.assertEquals(ceil(3.2), 4, "ceil")
+
+test.describe("Entries")
+let em = {"a": 1, "b": 2}
+let ent = entries(em)
+test.assertEquals(len(ent), 2, "entries length")
+
+test.describe("Slice")
+let sliced = slice([10, 20, 30, 40, 50], 2)
+test.assertEquals(sliced[0], 30, "slice from index 2")
+test.assertEquals(len(sliced), 3, "slice length")
+
+test.describe("Parse Functions")
+test.assertEquals(parseInt("42"), 42, "parseInt")
+test.assertEquals(toFloat("3.14") > 3.1, true, "toFloat")
+
+test.describe("Assertion Test")
+let caught2 = false
+try {
+    assert(false, "should fail")
+} catch (e) {
+    caught2 = true
+}
+test.assert(caught2, "assert(false) throws")
+
+test.describe("Array Concatenation")
+let a1 = [1, 2]
+let a2 = [3, 4]
+let a3 = a1 + a2
+test.assertEquals(len(a3), 4, "concatenated array length")
+test.assertEquals(a3[2], 3, "concatenated array element")
+
+test.results()
