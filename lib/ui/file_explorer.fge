@@ -1,0 +1,196 @@
+// Forge UI Library - File Explorer
+// Written in Forge, runs on FVM
+
+import "fs"
+import "os"
+import "ui/ui"
+
+struct FileEntry {
+    name: string
+    path: string
+    is_dir: bool
+    expanded: bool
+    depth: int
+    is_forge_file: bool
+}
+
+struct FileExplorer {
+    entries: list<FileEntry>
+    selected: int
+    scroll: int
+    root_path: string
+}
+
+impl FileExplorer {
+    fn new(root: string) -> FileExplorer {
+        let mut fe = FileExplorer {
+            entries: [],
+            selected: 0,
+            scroll: 0,
+            root_path: root
+        }
+        fe.refresh()
+        fe
+    }
+    
+    fn refresh(this: *FileExplorer) {
+        this.entries = []
+        this.add_dir(this.root_path, 0)
+        if this.selected >= this.entries.len() { this.selected = this.entries.len().saturating_sub(1) }
+    }
+    
+    fn add_dir(this: *FileExplorer, path: string, depth: int) {
+        let entries = fs.read_dir(path)
+        if entries.is_err() { return }
+        let entries = entries.unwrap()
+        
+        // Sort: directories first, then alphabetical
+        entries.sort(key = |e| (!e.is_dir, e.name))
+        
+        for entry in entries {
+            let full = path + "/" + entry.name
+            let is_dir = fs.is_dir(full)
+            let fe = FileEntry {
+                name: entry.name,
+                path: full,
+                is_dir: is_dir,
+                expanded: false,
+                depth: depth,
+                is_forge_file: entry.name.ends_with(".fge")
+            }
+            this.entries.push(fe)
+        }
+    }
+    
+    fn is_forge_file(this: *FileExplorer, name: string) -> bool {
+        name.ends_with(".fge")
+    }
+    
+    fn truncate(this: *FileExplorer, s: string, max: int) -> string {
+        if s.len() <= max { return s }
+        s.substr(0, max - 1) + "~"
+    }
+    
+    fn render(this: *FileExplorer, start_row: int, start_col: int, height: int, width: int, selected_idx: int) {
+        let theme = theme.get_current()
+        let visible_height = height - 1
+        let content_width = width - 4
+        
+        // Title bar
+        ui.draw_rect(start_row, start_col, width, 1, theme.panel_bg)
+        let title = " EXPLORER "
+        let pad = width - title.len()
+        ui.draw_text(start_row, start_col, title, theme.panel_bg, theme.accent1, true)
+        for i in 0..pad { print(" ") }
+        ui.draw_hline(start_row + 1, start_col, width, theme.panel_border)
+        
+        // File entries
+        let visible_height = height - 1
+        if this.selected < this.scroll { this.scroll = this.selected }
+        if this.selected >= this.scroll + visible_height { this.scroll = this.selected - visible_height + 1 }
+        
+        for i in 0..visible_height {
+            let entry_idx = i + this.scroll
+            let row = start_row + 1 + i
+            let col = start_col
+            
+            if entry_idx < this.entries.len() {
+                let e = &this.entries[entry_idx]
+                let selected = (entry_idx == this.selected)
+                
+                // Background
+                ui.draw_rect(start_col, row, width, 1, if selected { theme.selection_bg } else { theme.panel_bg })
+                
+                // Indentation
+                let indent = e.depth * 2
+                for j in 0..indent { if j + 2 < content_width { print(" ") } }
+                
+                // Tree connector
+                if e.depth > 0 {
+                    print("+-")
+                }
+                
+                // Icon
+                let icon = if e.is_dir {
+                    if e.expanded { "[-] " } else { "[+] " }
+                } else {
+                    if e.is_forge_file { "📄 " } else { "  " }
+                }
+                
+                // Name
+                let name_max = content_width - indent - 4
+                let display_name = if e.name.len() <= name_max { e.name } else { e.name.substr(0, name_max - 1) + "~" }
+                
+                let fg = if selected { theme.panel_fg } else if e.is_dir { theme.accent2 } else if e.is_forge_file { theme.accent3 } else { theme.panel_fg }
+                print(style(fg, theme.panel_bg, false, false))
+                print(display_name)
+                print(reset())
+                
+                // Fill rest
+                let used = indent + 2 + display_name.len()
+                for j in used..content_width { print(" ") }
+            } else {
+                for j in 0..content_width { print(" ") }
+            }
+        }
+    }
+    
+    fn move_up(this: *FileExplorer) { if this.selected > 0 { this.selected-- } }
+    fn move_down(this: *FileExplorer) { if this.selected + 1 < this.entries.len() { this.selected++ } }
+    fn toggle_expand(this: *FileExplorer) {
+        if this.selected < 0 || this.selected >= this.entries.len() { return }
+        let e = &mut this.entries[this.selected]
+        if !e.is_dir { return }
+        
+        if e.expanded {
+            // Collapse: remove all children
+            e.expanded = false
+            let prefix = e.path + "/"
+            let mut i = this.selected + 1
+            while i < this.entries.len() && this.entries[i].path.starts_with(prefix) {
+                this.entries.remove(i)
+            }
+        } else {
+            // Expand: add children
+            e.expanded = true
+            let insert_pos = this.selected + 1
+            let depth = e.depth + 1
+            
+            let entries = fs.read_dir(e.path)
+            if entries.is_err() { return }
+            let mut items = entries.unwrap()
+            items.sort(key = |a| (!a.is_dir, a.name))
+            
+            let mut insert_pos = this.selected + 1
+            for (name, is_dir) in items {
+                if name == "." || name == ".." { continue }
+                let fp = e.path + "/" + name
+                let is_dir = fs.is_dir(fp)
+                let fe = FileEntry {
+                    name: name,
+                    path: fp,
+                    is_dir: is_dir,
+                    expanded: false,
+                    depth: depth,
+                    is_forge_file: name.ends_with(".fge")
+                }
+                this.entries.insert(insert_pos, fe)
+                insert_pos++
+            }
+        }
+    }
+    
+    fn get_selected_path(this: *FileExplorer) -> string? {
+        if this.selected >= 0 && this.selected < this.entries.len() {
+            Some(this.entries[this.selected].path)
+        } else { None }
+    }
+    
+    fn get_entry_count(this: *FileExplorer) -> int { this.entries.len() }
+    fn get_entry(this: *FileExplorer, idx: int) -> FileEntry { this.entries[idx] }
+}
+
+fn FileExplorer::move_up(this: *FileExplorer) { if this.selected > 0 { this.selected-- } }
+fn FileExplorer::move_down(this: *FileExplorer) { if this.selected + 1 < this.entries.len() { this.selected++ } }
+fn FileExplorer::toggle_expand(this: *FileExplorer) { this.toggle_expand() }
+fn FileExplorer::get_selected_path(this: *FileExplorer) -> string? { this.get_selected_path() }

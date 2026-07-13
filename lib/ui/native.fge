@@ -1,0 +1,129 @@
+// Forge UI Library - Graphics & Native Backend
+// Written in Forge, runs on FVM
+
+import "ui/components"
+
+// ============================================================
+// Graphics Context
+// ============================================================
+
+struct Graphics {
+    // Native handle (platform-specific)
+    native_handle: void*
+}
+
+impl Graphics {
+    fn draw_string(this: *Graphics, text: string, x: int, y: int) = 0
+    fn draw_rect(this: *Graphics, x: int, y: int, width: int, height: int) = 0
+    fn fill_rect(this: *Graphics, x: int, y: int, width: int, height: int) = 0
+    fn set_color(this: *Graphics, rgba: uint32_t) = 0
+    fn set_font(this: *Graphics, name: string, size: int, bold: bool, italic: bool) = 0
+    fn get_size(this: *Graphics) -> (int, int) = 0
+}
+
+// ============================================================
+// Native UI Backends (Platform-specific)
+// ============================================================
+
+namespace native {
+    // Platform detection
+    #if target_os = "linux"
+        const PLATFORM = "linux"
+    #elif target_os = "macos"
+        const PLATFORM = "macos"
+    #elif target_os = "windows"
+        const PLATFORM = "windows"
+    #else
+        const PLATFORM = "unknown"
+    #endif
+    
+    // Initialize platform UI
+    fn init_platform_ui() {
+        #if target_os = "linux"
+            // Initialize GTK/Wayland/X11
+        #elif target_os = "macos"
+            // Initialize Cocoa
+        #elif target_os = "windows"
+            // Initialize Win32
+        #endif
+    }
+    
+    fn shutdown_platform_ui() {
+        // Cleanup
+    }
+    
+    // Window operations
+    fn create_window(title: string, x: int, y: int, w: int, h: int, resizable: bool) -> void*
+    fn show_window(handle: void*)
+    fn hide_window(handle: void*)
+    fn destroy_window(handle: void*)
+    fn set_window_title(handle: void*, title: string)
+    fn set_window_bounds(handle: void*, x: int, y: int, w: int, h: int)
+    
+    // Graphics
+    fn create_graphics(window_handle: void*) -> Graphics*
+    fn destroy_graphics(g: Graphics*)
+    
+    // Event pump
+    fn pump_events()
+    fn has_pending_events() -> bool
+    
+    // Clipboard
+    fn set_clipboard_text(text: string)
+    fn get_clipboard_text() -> string
+    
+    // File dialogs
+    fn show_open_file_dialog(title: string, filters: list<(string, string)>) -> string?
+    fn show_save_file_dialog(title: string, filters: list<(string, string)>, default: string) -> string?
+    fn show_folder_dialog(title: string, dir: string) -> string?
+    
+    // Message dialogs
+    fn show_message_dialog(parent: void*, message: string, title: string, type: int) -> int
+    fn show_confirm_dialog(parent: void*, message: string, title: string, type: int) -> int
+    fn show_input_dialog(parent: void*, message: string, title: string, default: string) -> string?
+}
+
+// Platform-specific implementations would be in separate files
+// For now, we'll provide stub implementations
+
+// ============================================================
+// Stub implementations for development
+// ============================================================
+
+fn init_platform_ui() {
+    // Stub
+}
+
+fn shutdown_platform_ui() {
+    // Stub
+}
+
+fn create_window(title: string, x: int, y: int, w: int, h: int, resizable: bool) -> void* {
+    0
+}
+
+fn show_window(handle: void*) {}
+fn hide_window(handle: void*) {}
+fn destroy_window(handle: void*) {}
+fn set_window_title(handle: void*, title: string) {}
+fn set_window_bounds(handle: void*, x: int, y: int, w: int, h: int) {}
+
+fn create_graphics(window_handle: void*) -> Graphics* {
+    0
+}
+
+fn destroy_graphics(g: Graphics*) {}
+
+fn pump_events() {}
+fn has_pending_events() -> bool { false }
+
+fn set_clipboard_text(text: string) {}
+fn get_clipboard_text() -> string { "" }
+
+fn show_open_file_dialog(title: string, filters: list<(string, string)>) -> string? { None }
+fn show_save_file_dialog(title: string, filters: list<(string, string)>, default: string) -> string? { None }
+fn show_folder_dialog(title: string, dir: string) -> string? { None }
+
+fn show_message_dialog(parent: void*, message: string, title: string, type: int) -> int { 0 }
+fn show_confirm_dialog(parent: void*, message: string, title: string, type: int) -> int { 0 }
+fn show_input_dialog(parent: void*, message: string, title: string, default: string) -> string? { None }

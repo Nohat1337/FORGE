@@ -1,0 +1,597 @@
+// Forge UI Library - Component System
+// Written in Forge, runs on FVM
+
+import "ui/theme"
+
+// ============================================================
+// Base Component
+// ============================================================
+
+struct Component {
+    x: int
+    y: int
+    width: int
+    height: int
+    background: int
+    foreground: int
+    font_name: string
+    font_size: int
+    bold: bool
+    italic: bool
+    visible: bool
+    enabled: bool
+    parent: Container?
+    action_listeners: list<ActionListener>
+    mouse_listeners: list<MouseListener>
+    key_listeners: list<KeyListener>
+}
+
+impl Component {
+    fn new() -> Component {
+        Component {
+            x: 0, y: 0, width: 0, height: 0,
+            background: 0xFF1E1E1E,
+            foreground: 0xFFD4D4D4,
+            font_name: "Sans",
+            font_size: 12,
+            bold: false,
+            italic: false,
+            visible: true,
+            enabled: true,
+            parent: nil,
+            action_listeners: [],
+            mouse_listeners: [],
+            key_listeners: [],
+        }
+    }
+    
+    // Position/size
+    fn set_bounds(this: *Component, x: int, y: int, w: int, h: int) {
+        this.x = x
+        this.y = y
+        this.width = w
+        this.height = h
+    }
+    
+    fn set_location(this: *Component, x: int, y: int) {
+        this.x = x
+        this.y = y
+    }
+    
+    fn set_size(this: *Component, w: int, h: int) {
+        this.width = w
+        this.height = h
+    }
+    
+    fn set_preferred_size(this: *Component, w: int, h: int) {
+        // Override in subclasses
+    }
+    
+    // Colors
+    fn set_background(this: *Component, color: int) {
+        this.background = color
+    }
+    
+    fn set_foreground(this: *Component, color: int) {
+        this.foreground = color
+    }
+    
+    // Font
+    fn set_font(this: *Component, name: string, size: int, bold: bool = false, italic: bool = false) {
+        this.font_name = name
+        this.font_size = size
+        this.bold = bold
+        this.italic = italic
+    }
+    
+    // Visibility
+    fn set_visible(this: *Component, v: bool) {
+        this.visible = v
+    }
+    
+    fn set_enabled(this: *Component, e: bool) {
+        this.enabled = e
+    }
+    
+    // Parent
+    fn get_parent(this: *Component) -> Container? {
+        this.parent
+    }
+    
+    fn set_parent(this: *Component, p: Container) {
+        this.parent = p
+    }
+    
+    // Event listeners
+    fn add_action_listener(this: *Component, l: ActionListener) {
+        this.action_listeners.push(l)
+    }
+    
+    fn add_mouse_listener(this: *Component, l: MouseListener) {
+        this.mouse_listeners.push(l)
+    }
+    
+    fn add_key_listener(this: *Component, l: KeyListener) {
+        this.key_listeners.push(l)
+    }
+    
+    // Painting
+    fn paint(this: *Component, g: Graphics) {
+        // Override in subclasses
+    }
+    
+    fn get_preferred_size(this: *Component) -> (int, int) {
+        (this.width, this.height)
+    }
+    
+    // Event dispatch
+    fn process_event(this: *Component, e: Event) {
+        match e.type {
+            EventType::MouseClicked => {
+                for l in this.mouse_listeners {
+                    l.mouse_clicked(e)
+                }
+            }
+            EventType::MousePressed => {
+                for l in this.mouse_listeners {
+                    l.mouse_pressed(e)
+                }
+            }
+            EventType::MouseReleased => {
+                for l in this.mouse_listeners {
+                    l.mouse_released(e)
+                }
+            }
+            EventType::MouseEntered => {
+                for l in this.mouse_listeners {
+                    l.mouse_entered(e)
+                }
+            }
+            EventType::MouseExited => {
+                for l in this.mouse_listeners {
+                    l.mouse_exited(e)
+                }
+            }
+            EventType::MouseMoved => {
+                for l in this.mouse_listeners {
+                    l.mouse_moved(e)
+                }
+            }
+            EventType::MouseDragged => {
+                for l in this.mouse_listeners {
+                    l.mouse_dragged(e)
+                }
+            }
+            EventType::KeyPressed => {
+                for l in this.key_listeners {
+                    l.key_pressed(e)
+                }
+            }
+            EventType::KeyReleased => {
+                for l in this.key_listeners {
+                    l.key_released(e)
+                }
+            }
+            EventType::KeyTyped => {
+                for l in this.key_listeners {
+                    l.key_typed(e)
+                }
+            }
+            EventType::Action => {
+                for l in this.action_listeners {
+                    l.action_performed(e)
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+// Container
+struct Container {
+    Component
+    children: list<Component>
+    layout: LayoutManager?
+}
+
+impl Container {
+    fn new() -> Container {
+        let mut c = Component::new()
+        c.children = []
+        c.layout = nil
+        Container { Component: c }
+    }
+    
+    fn add(this: *Container, child: Component) {
+        child.set_parent(this)
+        this.children.push(child)
+    }
+    
+    fn remove(this: *Container, child: Component) {
+        for i in 0..this.children.len() {
+            if this.children[i] == child {
+                this.children.remove(i)
+                break
+            }
+        }
+    }
+    
+    fn remove_all(this: *Container) {
+        for child in this.children {
+            child.set_parent(nil)
+        }
+        this.children.clear()
+    }
+    
+    fn get_components(this: *Container) -> list<Component> {
+        this.children
+    }
+    
+    fn set_layout(this: *Container, lm: LayoutManager) {
+        this.layout = lm
+    }
+    
+    fn do_layout(this: *Container) {
+        if this.layout != nil {
+            this.layout.layout_container(this)
+        }
+    }
+    
+    fn validate(this: *Container) {
+        this.do_layout()
+    }
+    
+    fn invalidate(this: *Container) {
+        // Mark for relayout
+    }
+    
+    fn paint(this: *Container, g: Graphics) {
+        // Paint background
+        g.set_color(this.background)
+        g.fill_rect(0, 0, this.width, this.height)
+        
+        // Paint children
+        for child in this.children {
+            if child.visible {
+                child.paint(g)
+            }
+        }
+    }
+    
+    fn process_event(this: *Container, e: Event) {
+        // Forward to children first (top-down)
+        for child in this.children {
+            if child.visible && child.enabled {
+                child.process_event(e)
+            }
+        }
+        
+        // Then handle container events
+        Component::process_event(this, e)
+    }
+}
+
+// Layout managers
+trait LayoutManager {
+    fn add_layout_component(name: string, comp: Component)
+    fn remove_layout_component(comp: Component)
+    fn preferred_layout_size(parent: Container) -> (int, int)
+    fn minimum_layout_size(parent: Container) -> (int, int)
+    fn layout_container(parent: Container)
+}
+
+struct FlowLayout {
+    alignment: int  // LEFT=0, CENTER=1, RIGHT=2
+    hgap: int
+    vgap: int
+}
+
+impl FlowLayout for LayoutManager {
+    fn new(align: int = 1, hgap: int = 5, vgap: int = 5) -> FlowLayout {
+        FlowLayout { alignment: align, hgap: hgap, vgap: vgap }
+    }
+    
+    fn add_layout_component(this: *FlowLayout, name: string, comp: Component) {}
+    fn remove_layout_component(this: *FlowLayout, comp: Component) {}
+    
+    fn preferred_layout_size(this: *FlowLayout, parent: Container) -> (int, int) {
+        let mut width = 0
+        let mut height = 0
+        let mut row_width = 0
+        let mut row_height = 0
+        
+        for child in parent.children {
+            if !child.visible { continue }
+            let pref = child.get_preferred_size()
+            
+            if row_width + pref.0 > parent.width {
+                width = max(width, row_width)
+                height += row_height + this.vgap
+                row_width = 0
+                row_height = 0
+            }
+            
+            row_width += pref.0 + this.hgap
+            row_height = max(row_height, pref.1)
+        }
+        
+        width = max(width, row_width)
+        height += row_height
+        (width, height)
+    }
+    
+    fn minimum_layout_size(this: *FlowLayout, parent: Container) -> (int, int) {
+        this.preferred_layout_size(parent)
+    }
+    
+    fn layout_container(this: *FlowLayout, parent: Container) {
+        let insets = (5, 5)  // padding
+        let mut x = insets.0
+        let mut y = insets.1
+        let row_height = 0
+        let start_x = insets.0
+        
+        for child in parent.children {
+            if !child.visible { continue }
+            let pref = child.get_preferred_size()
+            
+            if x + pref.0 > parent.width - insets.0 {
+                x = start_x
+                y += row_height + this.vgap
+                row_height = 0
+            }
+            
+            child.set_bounds(x, y, pref.0, pref.1)
+            x += pref.0 + this.hgap
+            row_height = max(row_height, pref.1)
+        }
+    }
+}
+
+struct BorderLayout {
+    north: Component?
+    south: Component?
+    east: Component?
+    west: Component?
+    center: Component?
+    hgap: int
+    vgap: int
+}
+
+impl BorderLayout for LayoutManager {
+    fn new(hgap: int = 0, vgap: int = 0) -> BorderLayout {
+        BorderLayout { hgap, vgap, north: nil, south: nil, east: nil, west: nil, center: nil }
+    }
+    
+    fn add_layout_component(this: *BorderLayout, name: string, comp: Component) {
+        match name.lower() {
+            "north" => this.north = Some(comp)
+            "south" => this.south = Some(comp)
+            "east" => this.east = Some(comp)
+            "west" => this.west = Some(comp)
+            "center" => this.center = Some(comp)
+            _ => {}
+        }
+    }
+    
+    fn remove_layout_component(this: *BorderLayout, comp: Component) {
+        if this.north == Some(comp) { this.north = nil }
+        else if this.south == Some(comp) { this.south = nil }
+        else if this.east == Some(comp) { this.east = nil }
+        else if this.west == Some(comp) { this.west = nil }
+        else if this.center == Some(comp) { this.center = nil }
+    }
+    
+    fn preferred_layout_size(this: *BorderLayout, parent: Container) -> (int, int) {
+        // Simplified
+        (0, 0)
+    }
+    
+    fn minimum_layout_size(this: *BorderLayout, parent: Container) -> (int, int) {
+        (0, 0)
+    }
+    
+    fn layout_container(this: *BorderLayout, parent: Container) {
+        let w = parent.width
+        let h = parent.height
+        
+        if let Some(c) = this.north {
+            let pref = c.get_preferred_size()
+            c.set_bounds(this.hgap, this.vgap, w - 2*this.hgap, pref.1)
+        }
+        if let Some(c) = this.south {
+            let pref = c.get_preferred_size()
+            c.set_bounds(this.hgap, h - pref.1 - this.vgap, w - 2*this.hgap, pref.1)
+        }
+        if let Some(c) = this.west {
+            let pref = c.get_preferred_size()
+            c.set_bounds(this.hgap, this.vgap + (if this.north.is_some() { this.north.unwrap().height + this.vgap } else { 0 }), pref.0, h - (this.north.map_or(0, |n| n.height + this.vgap) + this.vgap + (if this.south.is_some() { this.south.unwrap().height + this.vgap } else { 0 })))
+        }
+        if let Some(c) = this.east {
+            let pref = c.get_preferred_size()
+            c.set_bounds(w - pref.0 - this.hgap, this.vgap + (if this.north.is_some() { this.north.unwrap().height + this.vgap } else { 0 }), pref.0, h - (this.north.map_or(0, |n| n.height + this.vgap) + this.vgap + (if this.south.is_some() { this.south.unwrap().height + this.vgap } else { 0 })))
+        }
+        if let Some(c) = this.center {
+            let y = this.vgap + (if this.north.is_some() { this.north.unwrap().height + this.vgap } else { 0 })
+            let h = h - y - (if this.south.is_some() { this.south.unwrap().height + this.vgap } else { 0 })
+            let x = this.hgap + (if this.west.is_some() { this.west.unwrap().width + this.hgap } else { 0 })
+            let w = w - x - (if this.east.is_some() { this.east.unwrap().width + this.hgap } else { 0 })
+            c.set_bounds(x, y, w, h)
+        }
+    }
+}
+
+struct GridLayout {
+    rows: int
+    cols: int
+    hgap: int
+    vgap: int
+}
+
+impl GridLayout for LayoutManager {
+    fn new(rows: int, cols: int, hgap: int = 0, vgap: int = 0) -> GridLayout {
+        GridLayout { rows, cols, hgap, vgap }
+    }
+    
+    fn add_layout_component(this: *GridLayout, name: string, comp: Component) {}
+    fn remove_layout_component(this: *GridLayout, comp: Component) {}
+    
+    fn preferred_layout_size(this: *GridLayout, parent: Container) -> (int, int) {
+        // Simplified
+        (0, 0)
+    }
+    
+    fn minimum_layout_size(this: *GridLayout, parent: Container) -> (int, int) {
+        (0, 0)
+    }
+    
+    fn layout_container(this: *GridLayout, parent: Container) {
+        let w = parent.width
+        let h = parent.height
+        let rows = if this.rows == 0 { parent.children.len() } else { this.rows }
+        let cols = if this.cols == 0 { (parent.children.len() + rows - 1) / rows } else { this.cols }
+        
+        let cell_w = (parent.width - (cols + 1) * this.hgap) / cols
+        let cell_h = (parent.height - (rows + 1) * this.vgap) / rows
+        
+        for (i, child) in parent.children.enumerate() {
+            if !child.visible { continue }
+            let row = i / cols
+            let col = i % cols
+            let x = this.hgap + col * (cell_w + this.hgap)
+            let y = this.vgap + row * (cell_h + this.vgap)
+            child.set_bounds(x, y, cell_w, cell_h)
+        }
+    }
+}
+
+// Events
+struct Event {
+    type: EventType
+    source: Component
+    when: int64
+    modifiers: int
+}
+
+enum EventType {
+    ACTION,
+    MOUSE_CLICKED,
+    MOUSE_PRESSED,
+    MOUSE_RELEASED,
+    MOUSE_ENTERED,
+    MOUSE_EXITED,
+    MOUSE_MOVED,
+    MOUSE_DRAGGED,
+    KEY_PRESSED,
+    KEY_RELEASED,
+    KEY_TYPED,
+    WINDOW_OPENED,
+    WINDOW_CLOSING,
+    WINDOW_CLOSED,
+    WINDOW_ICONIFIED,
+    WINDOW_DEICONIFIED,
+    WINDOW_ACTIVATED,
+    WINDOW_DEACTIVATED,
+}
+
+struct ActionEvent {
+    Event
+    action_command: string
+}
+
+struct MouseEvent {
+    Event
+    x: int
+    y: int
+    click_count: int
+    button: int
+}
+
+struct KeyEvent {
+    Event
+    key_code: int
+    key_char: char
+}
+
+// Event listeners
+trait ActionListener {
+    fn action_performed(e: ActionEvent)
+}
+
+trait MouseListener {
+    fn mouse_clicked(e: MouseEvent) {}
+    fn mouse_pressed(e: MouseEvent) {}
+    fn mouse_released(e: MouseEvent) {}
+    fn mouse_entered(e: MouseEvent) {}
+    fn mouse_exited(e: MouseEvent) {}
+}
+
+trait KeyListener {
+    fn key_pressed(e: KeyEvent) {}
+    fn key_released(e: KeyEvent) {}
+    fn key_typed(e: KeyEvent) {}
+}
+
+// Adapter classes
+struct ActionAdapter implements ActionListener {
+    fn action_performed(this: *ActionAdapter, e: ActionEvent) {}
+}
+
+struct MouseAdapter implements MouseListener {}
+struct KeyAdapter implements KeyListener {}
+
+// Event queue
+struct EventQueue {
+    events: queue<Event>
+    mutex: mutex
+    cv: condition_variable
+}
+
+impl EventQueue {
+    fn post_event(e: Event) {
+        lock mutex
+        events.push(e)
+        cv.notify_one()
+    }
+    
+    fn get_next_event() -> Event? {
+        lock mutex
+        if events.empty() { return nil }
+        let e = events.front()
+        events.pop()
+        return Some(e)
+    }
+    
+    fn has_events() -> bool {
+        lock mutex
+        !events.empty()
+    }
+    
+    static fn instance() -> EventQueue {
+        static instance: EventQueue
+        instance
+    }
+}
+
+fn run_event_loop() {
+    loop {
+        if let Some(e) = EventQueue::instance().get_next_event() {
+            // Dispatch to appropriate component
+            // This would be implemented by the application
+        } else {
+            os.sleep_ms(10)
+        }
+    }
+}
+
+fn exit_event_loop() {
+    // Signal to exit
+}
+
+fn invoke_later(f: fn()) {
+    EventQueue::instance().post_event(Event { type: EventType::Action, ... })
+}
+
+fn invoke_and_wait(f: fn()) {
+    // Blocking invoke
+}

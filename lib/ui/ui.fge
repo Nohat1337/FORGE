@@ -1,0 +1,357 @@
+// Forge UI Library - Terminal UI Components
+// Written in Forge, runs on FVM
+
+// ============================================================
+// Core Types
+// ============================================================
+
+type Rect = { x: int, y: int, w: int, h: int }
+type Color = int  // 0xRRGGBBAA
+
+// Terminal capabilities
+struct Terminal {
+    cols: int
+    rows: int
+    raw_mode: bool
+}
+
+let mut _term = Terminal { cols: 80, rows: 24, raw_mode: false }
+
+fn init() {
+    _term.cols = os.get_term_width()
+    _term.rows = os.get_term_height()
+    os.enable_raw_mode()
+    _term.raw_mode = true
+    // Enable alternate screen buffer
+    print("\x1b[?1049h")
+    // Hide cursor
+    print("\x1b[?25l")
+    // Enable mouse
+    print("\x1b[?1003h\x1b[?1006h")
+}
+
+fn shutdown() {
+    if _term.raw_mode {
+        // Disable mouse
+        print("\x1b[?1003l\x1b[?1006l")
+        // Show cursor
+        print("\x1b[?25h")
+        // Restore screen
+        print("\x1b[?1049l")
+        os.disable_raw_mode()
+        _term.raw_mode = false
+    }
+}
+
+fn get_size() -> (int, int) {
+    (_term.cols, _term.rows)
+}
+
+fn on_resize(callback: fn(int, int)) {
+    os.on_sigwinch(move |w, h| {
+        _term.cols = w
+        _term.rows = h
+        callback(w, h)
+    })
+}
+
+// Colors
+fn rgb(r: int, g: int, b: int) -> Color {
+    (r << 24) | (g << 16) | (b << 8) | 0xFF
+}
+
+fn rgba(r: int, g: int, b: int, a: int) -> Color {
+    (r << 24) | (g << 16) | (b << 8) | a
+}
+
+fn fg_color(c: Color) -> string {
+    let r = (c >> 24) & 0xFF
+    let g = (c >> 16) & 0xFF
+    let b = (c >> 8) & 0xFF
+    "\x1b[38;2;" + r.to_string() + ";" + g.to_string() + ";" + b.to_string() + "m"
+}
+
+fn bg_color(c: Color) -> string {
+    let r = (c >> 24) & 0xFF
+    let g = (c >> 16) & 0xFF
+    let b = (c >> 8) & 0xFF
+    "\x1b[48;2;" + r.to_string() + ";" + g.to_string() + ";" + b.to_string() + "m"
+}
+
+fn reset() -> string {
+    "\x1b[0m"
+}
+
+fn bold() -> string { "\x1b[1m" }
+fn dim() -> string { "\x1b[2m" }
+fn italic() -> string { "\x1b[3m" }
+fn underline() -> string { "\x1b[4m" }
+fn blink() -> string { "\x1b[5m" }
+fn reverse() -> string { "\x1b[7m" }
+fn hidden() -> string { "\x1b[8m" }
+fn strikethrough() -> string { "\x1b[9m" }
+
+// Cursor movement
+fn move_cursor(x: int, y: int) -> string {
+    "\x1b[" + (y + 1).to_string() + ";" + (x + 1).to_string() + "H"
+}
+
+fn move_up(n: int = 1) -> string { "\x1b[" + n.to_string() + "A" }
+fn move_down(n: int = 1) -> string { "\x1b[" + n.to_string() + "B" }
+fn move_right(n: int = 1) -> string { "\x1b[" + n.to_string() + "C" }
+fn move_left(n: int = 1) -> string { "\x1b[" + n.to_string() + "D" }
+
+fn save_cursor() -> string { "\x1b[s" }
+fn restore_cursor() -> string { "\x1b[u" }
+
+fn clear_screen() -> string { "\x1b[2J" }
+fn clear_line() -> string { "\x1b[2K" }
+fn clear_to_end() -> string { "\x1b[K" }
+
+fn hide_cursor() -> string { "\x1b[?25l" }
+fn show_cursor() -> string { "\x1b[?25h" }
+
+fn alt_screen_on() -> string { "\x1b[?1049h" }
+fn alt_screen_off() -> string { "\x1b[?1049l" }
+fn enable_mouse() -> string { "\x1b[?1003h\x1b[?1006h" }
+fn disable_mouse() -> string { "\x1b[?1003l\x1b[?1006l" }
+
+// Box drawing
+namespace box {
+    const TL = "┌"
+    const TR = "┐"
+    const BL = "└"
+    const BR = "┘"
+    const H  = "─"
+    const V  = "│"
+    const T  = "┬"
+    const B  = "┴"
+    const L  = "├"
+    const R  = "┤"
+    const X  = "┼"
+}
+
+// Drawing primitives
+fn draw_char(x: int, y: int, ch: char, bg: Color, fg: Color, bold: bool = false, italic: bool = false) {
+    let mut s = ""
+    s += move_cursor(x, y)
+    if bold { s += bold() }
+    if italic { s += italic() }
+    s += bg_color(bg)
+    s += fg_color(fg)
+    s += ch.to_string()
+    s += reset()
+    print(s)
+}
+
+fn draw_text(x: int, y: int, text: string, bg: Color = 0, fg: Color = 0xFFFFFFFF, bold: bool = false) {
+    let mut s = move_cursor(x, y)
+    if bold { s += bold() }
+    if bg != 0 { s += bg_color(bg) }
+    if fg != 0 { s += fg_color(fg) }
+    s += text
+    s += reset()
+    print(s)
+}
+
+fn draw_rect(x: int, y: int, w: int, h: int, color: Color) {
+    for row in y..y+h {
+        let mut s = move_cursor(x, row) + bg_color(color) + " ".repeat(w) + reset()
+        print(s)
+    }
+}
+
+fn draw_line(x1: int, y1: int, x2: int, y2: int, color: Color) {
+    // Bresenham's line algorithm
+    let dx = (x2 - x1).abs()
+    let dy = (y2 - y1).abs()
+    let sx = if x1 < x2 { 1 } else { -1 }
+    let sy = if y1 < y2 { 1 } else { -1 }
+    let mut err = dx - dy
+    let mut x = x1
+    let mut y = y1
+    
+    while true {
+        draw_char(x, y, '█', color, 0)
+        if x == x2 && y == y2 { break }
+        let e2 = 2 * err
+        if e2 > -dy {
+            err -= dy
+            x += sx
+        }
+        if e2 < dx {
+            err += dx
+            y += sy
+        }
+    }
+}
+
+fn draw_box(x: int, y: int, w: int, h: int, color: Color) {
+    draw_char(x, y, '┌', color, 0)
+    draw_char(x + w - 1, y, '┐', color, 0)
+    draw_char(x, y + h - 1, '└', color, 0)
+    draw_char(x + w - 1, y + h - 1, '┘', color, 0)
+    
+    for i in 1..w-1 {
+        draw_char(x + i, y, '─', color, 0)
+        draw_char(x + i, y + h - 1, '─', color, 0)
+    }
+    for i in 1..h-1 {
+        draw_char(x, y + i, '│', color, 0)
+        draw_char(x + w - 1, y + i, '│', color, 0)
+    }
+}
+
+fn draw_hline(x: int, y: int, w: int, color: Color) {
+    for i in 0..w {
+        draw_char(x + i, y, '─', color, 0)
+    }
+}
+
+fn draw_vline(x: int, y: int, h: int, color: Color) {
+    for i in 0..h {
+        draw_char(x, y + i, '│', color, 0)
+    }
+}
+
+fn flush() {
+    os.stdout_flush()
+}
+
+// Input handling
+enum Key {
+    Char(char),
+    Enter,
+    Tab,
+    Backspace,
+    Escape,
+    Up,
+    Down,
+    Left,
+    Right,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Delete,
+    Insert,
+    F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
+    Ctrl(char),
+    Alt(char),
+    Shift(char),
+    Unknown
+}
+
+enum MouseEvent {
+    Press(int, int, int),   // x, y, button
+    Release(int, int, int),
+    Move(int, int),
+    Drag(int, int, int),
+    Wheel(int, int, int)    // x, y, delta
+}
+
+fn read_key() -> Key {
+    let mut buf = [0u8; 16]
+    let n = os.stdin_read(&mut buf)
+    if n == 0 { return Key::Unknown }
+    
+    // Parse ANSI escape sequences
+    if buf[0] == 0x1b {
+        if n == 1 { return Key::Escape }
+        if buf[1] == '[' {
+            // CSI sequence
+            if n >= 3 {
+                char c = buf[2]
+                if c >= '0' && c <= '9' {
+                    // Parameterized sequence
+                    if n >= 4 {
+                        char final = buf[3]
+                        if final == 'A' { return Key::Up }
+                        if final == 'B' { return Key::Down }
+                        if final == 'C' { return Key::Right }
+                        if final == 'D' { return Key::Left }
+                        if final == 'H' { return Key::Home }
+                        if final == 'F' { return Key::End }
+                        if final == '~' {
+                            if buf[2] == '1' && buf[3] == '5' { return Key::F5 }
+                            if buf[2] == '1' && buf[3] == '7' { return Key::F6 }
+                            if buf[2] == '1' && buf[3] == '8' { return Key::F7 }
+                            if buf[2] == '1' && buf[3] == '9' { return Key::F8 }
+                            if buf[2] == '2' && buf[3] == '0' { return Key::F9 }
+                            if buf[2] == '2' && buf[3] == '1' { return Key::F10 }
+                            if buf[2] == '2' && buf[3] == '3' { return Key::F11 }
+                            if buf[2] == '2' && buf[3] == '4' { return Key::F12 }
+                        }
+                    }
+                    else {
+                        switch c {
+                            case 'A': return Key::Up
+                            case 'B': return Key::Down
+                            case 'C': return Key::Right
+                            case 'D': return Key::Left
+                            case 'H': return Key::Home
+                            case 'F': return Key::End
+                            case 'Z': return Key::Tab // Shift+Tab
+                        }
+                    }
+                } else if buf[1] == 'O' {
+                    // SS3 sequence
+                    if n >= 3 {
+                        char c = buf[2]
+                        match c {
+                            'P' => return Key::F1
+                            'Q' => return Key::F2
+                            'R' => return Key::F3
+                            'S' => return Key::F4
+                            _ => Key::Unknown
+                        }
+                    }
+                } else {
+                    return Key::Escape
+                }
+            }
+            
+            // Control characters
+            if buf[0] < 32 {
+                let c = (buf[0] + b'a' - 1) as char
+                return Key::Ctrl(c)
+            }
+            
+            return Key::Char(buf[0] as char)
+        } else {
+            return Key::Char(buf[0] as char)
+        }
+    }
+}
+
+fn read_mouse() -> MouseEvent? {
+    // Simplified - in real impl would parse mouse sequences
+    None
+}
+
+// Input polling
+fn poll_input() -> Key? {
+    if os.stdin_ready() {
+        Some(read_key())
+    } else {
+        None
+    }
+}
+
+fn wait_for_key() -> Key {
+    loop {
+        if let Some(k) = poll_input() {
+            return k
+        }
+        os.sleep_ms(10)
+    }
+}
+
+// Mouse support (simplified)
+fn enable_mouse_reporting() {
+    print(enable_mouse())
+}
+
+fn disable_mouse_reporting() {
+    print(disable_mouse())
+}

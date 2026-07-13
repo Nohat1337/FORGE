@@ -9,6 +9,8 @@
 
 #define FORGE_VERSION "1.0.0"
 
+int pkg_main(int argc, char* argv[]);
+
 std::string readFile(const std::string& path) {
     std::ifstream file(path);
     if (!file.is_open()) throw std::runtime_error("Cannot open file: " + path);
@@ -81,6 +83,7 @@ int main(int argc, char* argv[]) {
             std::cout << "  -v, --version    Show version\n";
             std::cout << "  -h, --help       Show this help\n";
             std::cout << "  -e <code>        Execute string as code\n";
+            std::cout << "  pkg <cmd>        Package manager commands\n";
             std::cout << "  (no args)        Start REPL\n";
             return 0;
         } else if (arg == "-e") {

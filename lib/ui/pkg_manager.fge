@@ -1,0 +1,363 @@
+// Forge UI Library - Package Manager
+// Written in Forge, runs on FVM
+
+import "ui/ui"
+import "fs"
+import "os"
+import "json"
+import "net"
+
+struct Package {
+    name: string
+    version: string
+    description: string
+    author: string
+    license: string
+    repository: string
+    dependencies: map<string, string>
+    dev_dependencies: map<string, string>
+    keywords: list<string>
+    repository_type: string
+    homepage: string
+}
+
+struct PackageConfig {
+    name: string
+    version: string
+    description: string
+    author: string
+    license: string
+    main: string
+    scripts: map<string, string>
+    dependencies: map<string, string>
+    dev_dependencies: map<string, string>
+    keywords: list<string>
+    repository: string
+    homepage: string
+    license: string
+}
+
+struct PackageManager {
+    config: PackageConfig?
+    lock_file: LockFile?
+    cache_dir: string
+    registry_url: string
+}
+
+struct LockFile {
+    version: int
+    packages: map<string, LockPackage>
+}
+
+struct LockPackage {
+    version: string
+    integrity: string
+    resolved: string
+    dependencies: map<string, string>
+}
+
+impl PackageManager {
+    fn new() -> PackageManager {
+        PackageManager {
+            config: None,
+            lock_file: None,
+            cache_dir: os.home_dir() + "/.forge/cache",
+            registry_url: "https://registry.forge-lang.org"
+        }
+    }
+    
+    fn init(this: *PackageManager, name: string, version: string = "0.1.0") -> Result<(), string> {
+        if fs.exists("forge.json") {
+            return Err("forge.json already exists")
+        }
+        
+        let config = PackageConfig {
+            name,
+            version,
+            description: "",
+            author: os.env("USER").unwrap_or("unknown"),
+            license: "MIT",
+            main: "main.fge",
+            scripts: { "test": "forge test", "build": "forge build" },
+            dependencies: {},
+            dev_dependencies: {},
+            keywords: [],
+            repository: "",
+            homepage: "",
+            license: "MIT"
+        }
+        
+        this.config = Some(config)
+        this.save_config()
+        Ok(())
+    }
+    
+    fn load_config(this: *PackageManager) -> Result<(), string> {
+        let content = fs.read_file("forge.json")
+        if content.is_err() { return Err("forge.json not found") }
+        let config = json.decode(content.unwrap())
+        if config.is_err() { return Err("Invalid forge.json") }
+        this.config = Some(config.unwrap())
+        this.load_lock_file()
+        Ok(())
+    }
+    
+    fn save_config(this: *PackageManager) {
+        if this.config.is_some() {
+            fs.write_file("forge.json", json.encode(this.config.unwrap()))
+        }
+    }
+    
+    fn load_lock_file(this: *PackageManager) {
+        if fs.exists("forge.lock") {
+            let content = fs.read_file("forge.lock")
+            if content.is_ok() {
+                if let Ok(lock) = json.decode(content.unwrap()) {
+                    this.lock_file = Some(lock)
+                }
+            }
+        }
+    }
+    
+    fn save_lock_file(this: *PackageManager) {
+        if this.lock_file.is_some() {
+            fs.write_file("forge.lock", json.encode(this.lock_file.unwrap()))
+        }
+    }
+    
+    fn install(this: *PackageManager, packages: list<string>, dev: bool = false) -> Result<(), string> {
+        this.load_config()
+        this.load_lock_file()
+        
+        for pkg in packages {
+            let (name, version) = this.parse_package_spec(pkg)
+            let resolved = this.resolve_version(name, version)
+            
+            if resolved.is_err() {
+                return Err("Failed to resolve " + name + ": " + resolved.unwrap_err())
+            }
+            
+            let resolved_version = resolved.unwrap()
+            
+            // Download and install
+            let result = this.download_package(name, resolved_version)
+            if result.is_err() {
+                return Err("Failed to download " + name + ": " + result.unwrap_err())
+            }
+            
+            let pkg_info = result.unwrap()
+            
+            // Update config
+            if this.config.is_some() {
+                let config = this.config.as_mut().unwrap()
+                if this.dev {
+                    config.dev_dependencies.insert(name, resolved_version)
+                } else {
+                    config.dependencies.insert(name, resolved_version)
+                }
+            }
+            
+            // Update lock file
+            let lock_pkg = LockPackage {
+                version: resolved_version,
+                integrity: pkg_info.integrity,
+                resolved: pkg_info.resolved,
+                dependencies: pkg_info.dependencies
+            }
+            if this.lock_file.is_none() {
+                this.lock_file = Some(LockFile { version: 1, packages: {} })
+            }
+            this.lock_file.as_mut().unwrap().packages.insert(name, lock_pkg)
+        }
+        
+        this.save_config()
+        this.save_lock_file()
+        Ok(())
+    }
+    
+    fn add(this: *PackageManager, name: string, version: string = "latest") -> Result<(), string> {
+        this.install([name + "@" + version], false)
+    }
+    
+    fn add_dev(this: *PackageManager, name: string, version: string = "latest") -> Result<(), string> {
+        this.install([name + "@" + version], true)
+    }
+    
+    fn remove(this: *PackageManager, name: string) -> Result<(), string> {
+        this.load_config()
+        this.load_lock_file()
+        
+        if this.config.is_some() {
+            this.config.as_mut().unwrap().dependencies.remove(name)
+            this.config.as_mut().unwrap().dev_dependencies.remove(name)
+        }
+        
+        if this.lock_file.is_some() {
+            this.lock_file.as_mut().unwrap().packages.remove(name)
+        }
+        
+        this.save_config()
+        this.save_lock_file()
+        
+        // Remove from cache
+        fs.remove_dir_all(this.cache_dir + "/" + name)
+        
+        Ok(())
+    }
+    
+    fn update(this: *PackageManager, packages: list<string> = []) -> Result<(), string> {
+        this.load_config()
+        this.load_lock_file()
+        
+        let to_update = if packages.is_empty() {
+            let mut all = []
+            if this.config.is_some() {
+                for (name, _) in this.config.unwrap().dependencies { all.push(name) }
+                for (name, _) in this.config.unwrap().dev_dependencies { all.push(name) }
+            }
+            all
+        } else {
+            packages
+        }
+        
+        for name in to_update {
+            // Check for updates
+            let latest = this.get_latest_version(name)
+            if latest.is_ok() {
+                let latest_version = latest.unwrap()
+                let current = this.lock_file.as_ref().unwrap().packages.get(name)
+                if current.is_some() && current.unwrap().version != latest_version {
+                    // Update
+                    this.install([name + "@" + latest_version], false)
+                }
+            }
+        }
+        Ok(())
+    }
+    
+    fn search(this: *PackageManager, query: string) -> Result<list<Package>, string> {
+        // Search registry
+        let url = this.registry_url + "/search?q=" + url_encode(query)
+        let response = http_get(url)
+        if response.is_err() { return Err(response.unwrap_err()) }
+        let result = json.decode(response.unwrap())
+        if result.is_err() { return Err("Failed to parse search results") }
+        result.unwrap()
+    }
+    
+    fn publish(this: *PackageManager, token: string) -> Result<(), string> {
+        this.load_config()
+        if this.config.is_none() { return Err("No package configuration") }
+        
+        // Create package tarball
+        let tarball = this.create_package_tarball()
+        
+        // Upload to registry
+        let url = this.registry_url + "/publish"
+        let headers = { "Authorization": "Bearer " + token }
+        let response = http_post(url, tarball, headers)
+        if response.is_err() { return Err("Failed to publish: " + response.unwrap_err()) }
+        
+        Ok(())
+    }
+    
+    fn parse_package_spec(this: *PackageManager, spec: string) -> (string, string) {
+        let parts = spec.split('@')
+        if parts.len() == 1 { (parts[0], "latest") }
+        else { (parts[0], parts[1]) }
+    }
+    
+    fn resolve_version(this: *PackageManager, name: string, version: string) -> Result<string, string> {
+        if version == "latest" {
+            this.get_latest_version(name)
+        } else if version.starts_with("^") || version.starts_with("~") {
+            // Semver range resolution
+            this.resolve_range(name, version)
+        } else {
+            Ok(version)
+        }
+    }
+    
+    fn get_latest_version(this: *PackageManager, name: string) -> Result<string, string> {
+        let url = this.registry_url + "/packages/" + name + "/latest"
+        let response = http_get(url)
+        if response.is_err() { return Err(response.unwrap_err()) }
+        let result = json.decode(response.unwrap())
+        if result.is_err() { return Err("Failed to parse version") }
+        result.unwrap().get("version").unwrap()
+    }
+    
+    fn resolve_range(this: *PackageManager, name: string, range: string) -> Result<string, string> {
+        // Simplified - would use semver library
+        this.get_latest_version(name)
+    }
+    
+    fn download_package(this: *PackageManager, name: string, version: string) -> Result<PackageInfo, string> {
+        let url = this.registry_url + "/packages/" + name + "/" + version + "/download"
+        let response = http_get_stream(url)
+        if response.is_err() { return Err(response.unwrap_err()) }
+        
+        let stream = response.unwrap()
+        let dest = this.cache_dir + "/" + name + "-" + version
+        
+        // Download and verify integrity
+        let mut hasher = sha256_new()
+        let mut file = fs.create(dest + ".tar.gz")
+        let mut buffer = [0u8; 8192]
+        
+        loop {
+            let n = stream.read(&mut buffer)
+            if n == 0 { break }
+            file.write(&buffer[..n])
+            hasher.update(&buffer[..n])
+        }
+        
+        let integrity = hasher.finalize()
+        
+        // Extract
+        tar_extract(dest + ".tar.gz", dest)
+        
+        // Read package.json
+        let pkg_json = fs.read_file(dest + "/forge.json")
+        let config = json.decode(pkg_json.unwrap())
+        
+        Ok(PackageInfo {
+            integrity,
+            resolved: "https://registry.forge-lang.org/" + name + "/" + version,
+            dependencies: config.unwrap().dependencies.unwrap_or({})
+        })
+    }
+    
+    fn create_package_tarball(this: *PackageManager) -> string {
+        // Create tarball of project
+        let output = os.temp_dir() + "/package-" + os.uuid() + ".tar.gz"
+        tar_create("forge.json", "src", "lib", "tests", "examples", "README.md", "LICENSE")
+        os.rename("/tmp/package.tar.gz", output)
+        output
+    }
+}
+
+struct PackageInfo {
+    integrity: string
+    resolved: string
+    dependencies: map<string, string>
+}
+
+fn url_encode(s: string) -> string {
+    // URL encoding implementation
+    let mut result = ""
+    for c in s.chars() {
+        if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' {
+            result.push(c)
+        } else {
+            result.push('%')
+            result.push(hex((c as u8) >> 4))
+            result.push(hex((c as u8) & 0xF))
+        }
+    }
+    result
+}
+
+fn hex(n: u8) -> char {
+    if n < 10 { (b'0' + n) as char } else { (b'a' + n - 10) as char }
+}
