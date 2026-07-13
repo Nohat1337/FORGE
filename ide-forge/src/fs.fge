@@ -1,0 +1,264 @@
+// FS Module - File system operations
+
+import "os"
+
+fn read_file(path: string) -> Result<string, string> {
+    os.read_file(path)
+}
+
+fn write_file(path: string, content: string) -> Result<(), string> {
+    os.write_file(path, content)
+}
+
+fn read_dir(path: string) -> Result<list<DirEntry>, string> {
+    os.read_dir(path)
+}
+
+fn is_dir(path: string) -> bool {
+    os.is_dir(path)
+}
+
+fn is_file(path: string) -> bool {
+    os.is_file(path)
+}
+
+fn exists(path: string) -> bool {
+    os.path_exists(path)
+}
+
+fn create_dir(path: string) -> Result<(), string> {
+    os.create_dir(path)
+}
+
+fn create_dir_all(path: string) -> Result<(), string> {
+    os.create_dir_all(path)
+}
+
+fn remove_file(path: string) -> Result<(), string> {
+    os.remove_file(path)
+}
+
+fn remove_dir(path: string) -> Result<(), string> {
+    os.remove_dir(path)
+}
+
+fn remove_dir_all(path: string) -> Result<(), string> {
+    os.remove_dir_all(path)
+}
+
+fn copy_file(from: string, to: string) -> Result<(), string> {
+    os.copy_file(from, to)
+}
+
+fn rename(from: string, to: string) -> Result<(), string> {
+    os.rename(from, to)
+}
+
+fn canonicalize(path: string) -> Result<string, string> {
+    os.canonicalize(path)
+}
+
+fn cwd() -> string {
+    os.cwd()
+}
+
+fn set_cwd(path: string) -> Result<(), string> {
+    os.chdir(path)
+}
+
+struct DirEntry {
+    name: string
+    path: string
+    is_dir: bool
+    size: int
+    modified: float
+}
+
+fn list_dir(path: string) -> list<DirEntry> {
+    let entries = read_dir(path)
+    if entries.is_err() { return [] }
+    let result = []
+    for e in entries.unwrap() {
+        let full = path + "/" + e.name
+        let meta = os.metadata(full)
+        result.push(DirEntry {
+            name: e.name,
+            path: full,
+            is_dir: e.is_dir,
+            size: meta.size,
+            modified: meta.modified
+        })
+    }
+    result
+}
+
+fn find_files(root: string, pattern: string) -> list<string> {
+    let result = []
+    fn walk(dir: string) {
+        let entries = list_dir(dir)
+        for e in e {
+            let full = dir + "/" + e.name
+            if e.is_dir {
+                walk(full)
+            } else if e.name.contains(pattern) {
+                result.push(full)
+            }
+        }
+    }
+    walk(root)
+    result
+}
+
+fn glob(pattern: string) -> list<string> {
+    // Simple glob implementation
+    let parts = pattern.split('/')
+    let mut results = [""]
+    for part in parts {
+        let mut new_results = []
+        if part.contains('*') || part.contains('?') {
+            for base in results {
+                let dir = if base == "" { "." } else { base }
+                let entries = list_dir(dir)
+                for e in entries {
+                    let full = if base == "" { e.name } else { base + "/" + e.name }
+                    if match_glob(e.name, part) {
+                        new_results.push(full)
+                    }
+                }
+            }
+            results = new_results
+        } else {
+            for base in results {
+                results.push(base + "/" + part)
+            }
+        }
+    }
+    results
+}
+
+fn match_glob(name: string, pattern: string) -> bool {
+    // Simple glob matching
+    let mut i = 0
+    let mut j = 0
+    let mut star_i = -1
+    let mut star_j = -1
+    
+    while i < name.len() {
+        if j < pattern.len() && (pattern[j] == name[i] || pattern[j] == '?') {
+            i++
+            j++
+        } else if j < pattern.len() && pattern[j] == '*' {
+            star_i = i
+            star_j = j
+            j++
+        } else if star_j != -1 {
+            j = star_j + 1
+            star_i++
+            i = star_i
+        } else {
+            return false
+        }
+    }
+    
+    while j < pattern.len() && pattern[j] == '*' {
+        j++
+    }
+    
+    j == pattern.len()
+}
+
+fn temp_dir() -> string {
+    os.temp_dir()
+}
+
+fn temp_file(prefix: string = "tmp") -> string {
+    os.temp_file(prefix)
+}
+
+fn read_to_string(path: string) -> Result<string, string> {
+    read_file(path)
+}
+
+fn write_string(path: string, content: string) -> Result<(), string> {
+    write_file(path, content)
+}
+
+fn append_file(path: string, content: string) -> Result<(), string> {
+    os.append_file(path, content)
+}
+
+fn copy_dir(from: string, to: string) -> Result<(), string> {
+    os.copy_dir(from, to)
+}
+
+fn get_temp_dir() -> string {
+    os.temp_dir()
+}
+
+fn get_home_dir() -> string {
+    os.home_dir()
+}
+
+fn get_config_dir() -> string {
+    os.config_dir()
+}
+
+fn get_data_dir() -> string {
+    os.data_dir()
+}
+
+fn get_cache_dir() -> string {
+    os.cache_dir()
+}
+
+fn get_executable_dir() -> string {
+    os.executable_dir()
+}
+
+fn is_absolute(path: string) -> bool {
+    path.starts_with("/") || (path.len() >= 3 && path[1] == ':' && path[2] == '\\')
+}
+
+fn join(a: string, b: string) -> string {
+    if a.ends_with("/") { a + b } else { a + "/" + b }
+}
+
+fn parent(path: string) -> string {
+    let i = path.rfind('/')
+    if i == -1 { "." } else { path.substr(0, i) }
+}
+
+fn filename(path: string) -> string {
+    let i = path.rfind('/')
+    if i == -1 { path } else { path.substr(i + 1) }
+}
+
+fn extension(path: string) -> string {
+    let i = path.rfind('.')
+    let j = path.rfind('/')
+    if i == -1 || (j != -1 && i < j) { "" } else { path.substr(i + 1) }
+}
+
+fn stem(path: string) -> string {
+    let name = filename(path)
+    let i = name.rfind('.')
+    if i == -1 { name } else { name.substr(0, i) }
+}
+
+fn normalize(path: string) -> string {
+    let parts = path.split('/')
+    let mut result = []
+    for part in parts {
+        if part == "" || part == "." { continue }
+        if part == ".." {
+            if !result.is_empty() { result.pop() }
+        } else {
+            result.push(part)
+        }
+    }
+    if path.starts_with("/") {
+        "/" + result.join("/")
+    } else {
+        result.join("/")
+    }
+}

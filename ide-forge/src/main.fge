@@ -1,0 +1,1385 @@
+// Forge Studio - Terminal IDE written in Forge
+// Runs on FVM (Forge Virtual Machine)
+
+import "ui"
+import "fs"
+import "os"
+import "repl"
+import "syntax"
+import "theme"
+
+// ============================================================
+// Types
+// ============================================================
+
+type Position = { line: int, col: int }
+type Range = { start: Position, end: Position }
+type Token = { type: string, text: string, line: int, col: int }
+type Style = { fg: int, bg: int, bold: bool, italic: bool, underline: bool }
+
+// ============================================================
+// Theme System
+// ============================================================
+
+let THEMES = {
+    "dark": {
+        editor_bg: 0xFF1E1E1E,
+        editor_fg: 0xFFD4D4D4,
+        gutter_bg: 0xFF252526,
+        gutter_fg: 0xFF858585,
+        cursor: 0xFFA6A6A6,
+        selection: 0xFF264F78,
+        status_bg: 0xFF007ACC,
+        status_fg: 0xFFFFFFFF,
+        menu_bg: 0xFF2D2D2D,
+        menu_fg: 0xFFCCCCCC,
+        menu_sel_bg: 0xFF094771,
+        panel_bg: 0xFF252526,
+        panel_fg: 0xFFCCCCCC,
+        keyword: 0xFF569CD6,
+        string: 0xFFCE9178,
+        number: 0xFFB5CEA8,
+        comment: 0xFF6A9955,
+        operator: 0xFFD4D4D4,
+        function: 0xFFDCDCAA,
+        type: 0xFF4EC9B0,
+        builtin: 0xFF4EC9B0,
+        error: 0xFFF44747,
+    },
+    "dracula": {
+        editor_bg: 0xFF282A36,
+        editor_fg: 0xFFF8F8F2,
+        gutter_bg: 0xFF21222C,
+        gutter_fg: 0xFF6272A4,
+        cursor: 0xFFF8F8F2,
+        selection: 0xFF44475A,
+        status_bg: 0xFF44475A,
+        status_fg: 0xFFF8F8F2,
+        menu_bg: 0xFF21222C,
+        menu_fg: 0xFFF8F8F2,
+        menu_sel_bg: 0xFF44475A,
+        panel_bg: 0xFF21222C,
+        panel_fg: 0xFFF8F8F2,
+        keyword: 0xFFFF79C6,
+        string: 0xFFF1FA8C,
+        number: 0xFFBD93F9,
+        comment: 0xFF6272A4,
+        operator: 0xFFFF79C6,
+        function: 0xFF50FA7B,
+        type: 0xFF8BE9FD,
+        builtin: 0xFF8BE9FD,
+        error: 0xFFFF5555,
+    },
+    "nord": {
+        editor_bg: 0xFF2E3440,
+        editor_fg: 0xFFD8DEE9,
+        gutter_bg: 0xFF3B4252,
+        gutter_fg: 0xFF4C566A,
+        cursor: 0xFFD8DEE9,
+        selection: 0xFF3B4252,
+        status_bg: 0xFF434C5E,
+        status_fg: 0xFFECEFF4,
+        menu_bg: 0xFF3B4252,
+        menu_fg: 0xFFECEFF4,
+        menu_sel_bg: 0xFF434C5E,
+        panel_bg: 0xFF3B4252,
+        panel_fg: 0xFFECEFF4,
+        keyword: 0xFF81A1C1,
+        string: 0xFFA3BE8C,
+        number: 0xFFB48EAD,
+        comment: 0xFF4C566A,
+        operator: 0xFF81A1C1,
+        function: 0xFF88C0D0,
+        type: 0xFF8FBCBB,
+        builtin: 0xFF8FBCBB,
+        error: 0xFFBF616A,
+    },
+    "light": {
+        editor_bg: 0xFFFFFFFF,
+        editor_fg: 0xFF333333,
+        gutter_bg: 0xFFF3F3F3,
+        gutter_fg: 0xFF999999,
+        cursor: 0xFF000000,
+        selection: 0xFFADD6FF,
+        status_bg: 0xFF007ACC,
+        status_fg: 0xFFFFFFFF,
+        menu_bg: 0xFFF3F3F3,
+        menu_fg: 0xFF333333,
+        menu_sel_bg: 0xFFADD6FF,
+        panel_bg: 0xFFF3F3F3,
+        panel_fg: 0xFF333333,
+        keyword: 0xFF0000FF,
+        string: 0xFFA31515,
+        number: 0xFF098658,
+        comment: 0xFF008000,
+        operator: 0xFF333333,
+        function: 0xFF795E26,
+        type: 0xFF267F99,
+        builtin: 0xFF267F99,
+        error: 0xFFFF0000,
+    },
+}
+
+let current_theme = "dark"
+let theme = THEMES[current_theme]
+
+fn set_theme(name: string) {
+    if THEMES[name] {
+        current_theme = name
+        theme = THEMES[name]
+    }
+}
+
+// ============================================================
+// Syntax Highlighter (Forge)
+// ============================================================
+
+let KEYWORDS = [
+    "let", "const", "fn", "return", "if", "else", "while", "for", "in",
+    "match", "case", "class", "extends", "super", "this", "new", "import",
+    "export", "try", "catch", "finally", "throw", "break", "continue",
+    "and", "or", "not", "true", "false", "nil", "as", "is", "pub", "static",
+    "gen", "yield", "await", "async", "struct", "enum", "impl", "trait",
+    "mod", "use", "type", "where", "ref", "mut", "move", "box"
+]
+
+let TYPES = [
+    "int", "float", "string", "bool", "void", "any", "list", "map", "set",
+    "fn", "Option", "Result", "Future", "Channel", "Mutex", "Arc", "Rc"
+]
+
+let BUILTINS = [
+    "print", "println", "len", "str", "int", "float", "bool", "type",
+    "push", "pop", "insert", "remove", "contains", "keys", "values",
+    "abs", "min", "max", "sqrt", "pow", "floor", "ceil", "round",
+    "random", "random_int", "time", "sleep", "read_file", "write_file",
+    "exec", "env", "cwd", "args", "exit", "panic", "assert"
+]
+
+fn is_keyword(word: string) -> bool {
+    KEYWORDS.contains(word)
+}
+
+fn is_type(word: string) -> bool {
+    TYPES.contains(word)
+}
+
+fn is_builtin(word: string) -> bool {
+    BUILTINS.contains(word)
+}
+
+fn highlight_line(line: string, line_num: int) -> list<Style> {
+    let styles = []
+    let i = 0
+    let len = line.len()
+    
+    while i < len {
+        let c = line[i]
+        
+        // Whitespace
+        if c.is_whitespace() {
+            styles.push({ fg: theme.editor_fg, bg: theme.editor_bg, bold: false, italic: false, underline: false })
+            i++
+            continue
+        }
+        
+        // Comment
+        if c == '/' && i + 1 < len && line[i + 1] == '/' {
+            let rest = line.substr(i)
+            styles.push({ fg: theme.comment, bg: theme.editor_bg, bold: false, italic: true, underline: false })
+            break
+        }
+        
+        // String
+        if c == '"' || c == '\'' {
+            let quote = c
+            let start = i
+            i++
+            while i < len && line[i] != quote {
+                if line[i] == '\\' && i + 1 < len {
+                    i += 2
+                } else {
+                    i++
+                }
+            }
+            if i < len { i++ }
+            for _ in start..i {
+                styles.push({ fg: theme.string, bg: theme.editor_bg, bold: false, italic: false, underline: false })
+            }
+            continue
+        }
+        
+        // Number
+        if c.is_digit() || (c == '.' && i + 1 < len && line[i + 1].is_digit()) {
+            let start = i
+            let has_dot = false
+            while i < len && (line[i].is_digit() || line[i] == '.') {
+                if line[i] == '.' {
+                    if has_dot { break }
+                    has_dot = true
+                }
+                i++
+            }
+            for _ in start..i {
+                styles.push({ fg: theme.number, bg: theme.editor_bg, bold: false, italic: false, underline: false })
+            }
+            continue
+        }
+        
+        // Identifier/Keyword
+        if c.is_alpha() || c == '_' {
+            let start = i
+            while i < len && (line[i].is_alnum() || line[i] == '_') {
+                i++
+            }
+            let word = line.substr(start, i - start)
+            let style = if is_keyword(word) {
+                { fg: theme.keyword, bg: theme.editor_bg, bold: true, italic: false, underline: false }
+            } else if is_type(word) {
+                { fg: theme.type, bg: theme.editor_bg, bold: true, italic: false, underline: false }
+            } else if is_builtin(word) {
+                { fg: theme.builtin, bg: theme.editor_bg, bold: true, italic: false, underline: false }
+            } else {
+                // Check if followed by '(' for function call
+                let j = i
+                while j < len && line[j].is_whitespace() { j++ }
+                if j < len && line[j] == '(' {
+                    { fg: theme.function, bg: theme.editor_bg, bold: false, italic: false, underline: false }
+                } else {
+                    { fg: theme.editor_fg, bg: theme.editor_bg, bold: false, italic: false, underline: false }
+                }
+            }
+            for _ in start..i {
+                styles.push(style)
+            }
+            continue
+        }
+        
+        // Operators
+        let op_chars = "+-*/%=<>!&|^~?:."
+        if op_chars.contains(c) {
+            let start = i
+            while i < len && op_chars.contains(line[i]) {
+                i++
+            }
+            for _ in start..i {
+                styles.push({ fg: theme.operator, bg: theme.editor_bg, bold: true, italic: false, underline: false })
+            }
+            continue
+        }
+        
+        // Punctuation
+        let punct = "()[]{};,:"
+        if punct.contains(c) {
+            styles.push({ fg: theme.operator, bg: theme.editor_bg, bold: false, italic: false, underline: false })
+            i++
+            continue
+        }
+        
+        // Default
+        styles.push({ fg: theme.editor_fg, bg: theme.editor_bg, bold: false, italic: false, underline: false })
+        i++
+    }
+    
+    return styles
+}
+
+// ============================================================
+// Editor Component
+// ============================================================
+
+struct Editor {
+    lines: list<string>
+    cursor_line: int
+    cursor_col: int
+    scroll_line: int
+    scroll_col: int
+    selection: Range?
+    modified: bool
+    filepath: string?
+    syntax_cache: list<list<Style>>
+}
+
+fn Editor.new() -> Editor {
+    Editor {
+        lines: [""],
+        cursor_line: 0,
+        cursor_col: 0,
+        scroll_line: 0,
+        scroll_col: 0,
+        selection: nil,
+        modified: false,
+        filepath: nil,
+        syntax_cache: [[]]
+    }
+}
+
+fn Editor.load_file(this: *Editor, path: string) -> Result<(), string> {
+    let content = fs.read_file(path)
+    if content.is_err() {
+        return Err(content.unwrap_err())
+    }
+    let text = content.unwrap()
+    this.lines = text.split('\n')
+    if this.lines.last() == "" {
+        this.lines.pop()
+    }
+    this.cursor_line = 0
+    this.cursor_col = 0
+    this.scroll_line = 0
+    this.scroll_col = 0
+    this.selection = nil
+    this.modified = false
+    this.filepath = Some(path)
+    this.rebuild_syntax()
+    Ok(())
+}
+
+fn Editor.save(this: *Editor) -> Result<(), string> {
+    if this.filepath.is_none() {
+        return Err("No file path")
+    }
+    let text = this.lines.join('\n')
+    fs.write_file(this.filepath.unwrap(), text)
+    this.modified = false
+    Ok(())
+}
+
+fn Editor.rebuild_syntax(this: *Editor) {
+    this.syntax_cache = []
+    for (i, line) in this.lines.enumerate() {
+        this.syntax_cache.push(highlight_line(line, i))
+    }
+}
+
+fn Editor.insert_char(this: *Editor, c: char) {
+    if this.selection.is_some() {
+        this.delete_selection()
+    }
+    let line = &mut this.lines[this.cursor_line]
+    line.insert(this.cursor_col, c)
+    this.cursor_col++
+    this.modified = true
+    this.rebuild_syntax_line(this.cursor_line)
+}
+
+fn Editor.insert_newline(this: *Editor) {
+    if this.selection.is_some() {
+        this.delete_selection()
+    }
+    let current_line = this.lines[this.cursor_line].clone()
+    let after = current_line.substr(this.cursor_col)
+    this.lines[this.cursor_line] = current_line.substr(0, this.cursor_col)
+    this.lines.insert(this.cursor_line + 1, after)
+    this.cursor_line++
+    this.cursor_col = 0
+    
+    // Auto-indent
+    let prev_line = &this.lines[this.cursor_line - 1]
+    let indent = prev_line.chars().take_while(|c| c.is_whitespace()).collect::<string>()
+    if indent.len() > 0 {
+        this.lines[this.cursor_line] = indent + this.lines[this.cursor_line]
+        this.cursor_col = indent.len()
+    }
+    this.modified = true
+    this.rebuild_syntax()
+}
+
+fn Editor.backspace(this: *Editor) {
+    if this.selection.is_some() {
+        this.delete_selection()
+        return
+    }
+    if this.cursor_col > 0 {
+        let line = &mut this.lines[this.cursor_line]
+        line.remove(this.cursor_col - 1)
+        this.cursor_col--
+        this.modified = true
+        this.rebuild_syntax_line(this.cursor_line)
+    } else if this.cursor_line > 0 {
+        let current = this.lines.remove(this.cursor_line)
+        this.cursor_line--
+        this.cursor_col = this.lines[this.cursor_line].len()
+        this.lines[this.cursor_line] += current
+        this.modified = true
+        this.rebuild_syntax()
+    }
+}
+
+fn Editor.delete_selection(this: *Editor) {
+    if this.selection.is_none() { return }
+    let sel = this.selection.unwrap()
+    let (start_line, start_col, end_line, end_col) = if sel.start.line < sel.end.line || (sel.start.line == sel.end.line && sel.start.col < sel.end.col) {
+        (sel.start.line, sel.start.col, sel.end.line, sel.end.col)
+    } else {
+        (sel.end.line, sel.end.col, sel.start.line, sel.start.col)
+    }
+    
+    if start_line == end_line {
+        let line = &mut this.lines[start_line]
+        line.remove_range(start_col..end_col)
+    } else {
+        let first = this.lines[start_line].substr(0, start_col)
+        let last = this.lines[end_line].substr(end_col)
+        this.lines[start_line] = first + last
+        this.lines.remove_range((start_line + 1)..=(end_line))
+    }
+    this.cursor_line = start_line
+    this.cursor_col = start_col
+    this.selection = None
+    this.modified = true
+    this.rebuild_syntax()
+}
+
+fn Editor.rebuild_syntax_line(this: *Editor, line_num: int) {
+    this.syntax_cache[line_num] = highlight_line(this.lines[line_num], line_num)
+}
+
+fn Editor.move_up(this: *Editor) {
+    if this.cursor_line > 0 {
+        this.cursor_line--
+        this.cursor_col = min(this.cursor_col, this.lines[this.cursor_line].len())
+    }
+}
+
+fn Editor.move_down(this: *Editor) {
+    if this.cursor_line + 1 < this.lines.len() {
+        this.cursor_line++
+        this.cursor_col = min(this.cursor_col, this.lines[this.cursor_line].len())
+    }
+}
+
+fn Editor.move_left(this: *Editor) {
+    if this.cursor_col > 0 {
+        this.cursor_col--
+    } else if this.cursor_line > 0 {
+        this.cursor_line--
+        this.cursor_col = this.lines[this.cursor_line].len()
+    }
+}
+
+fn Editor.move_right(this: *Editor) {
+    if this.cursor_col < this.lines[this.cursor_line].len() {
+        this.cursor_col++
+    } else if this.cursor_line + 1 < this.lines.len() {
+        this.cursor_line++
+        this.cursor_col = 0
+    }
+}
+
+fn Editor.page_up(this: *Editor, height: int) {
+    this.cursor_line = max(0, this.cursor_line - height)
+    this.cursor_col = min(this.cursor_col, this.lines[this.cursor_line].len())
+}
+
+fn Editor.page_down(this: *Editor, height: int) {
+    this.cursor_line = min(this.lines.len() - 1, this.cursor_line + height)
+    this.cursor_col = min(this.cursor_col, this.lines[this.cursor_line].len())
+}
+
+fn Editor.move_home(this: *Editor) {
+    this.cursor_col = 0
+}
+
+fn Editor.move_end(this: *Editor) {
+    this.cursor_col = this.lines[this.cursor_line].len()
+}
+
+fn Editor.move_to_start(this: *Editor) {
+    this.cursor_line = 0
+    this.cursor_col = 0
+}
+
+fn Editor.move_to_end(this: *Editor) {
+    this.cursor_line = this.lines.len() - 1
+    this.cursor_col = this.lines[this.cursor_line].len()
+}
+
+fn Editor.get_text(this: *Editor) -> string {
+    this.lines.join('\n')
+}
+
+fn Editor.set_text(this: *Editor, text: string) {
+    this.lines = text.split('\n')
+    if this.lines.last() == "" {
+        this.lines.pop()
+    }
+    this.cursor_line = 0
+    this.cursor_col = 0
+    this.rebuild_syntax()
+}
+
+// ============================================================
+// File Explorer
+// ============================================================
+
+struct FileEntry {
+    name: string
+    path: string
+    is_dir: bool
+    expanded: bool
+    depth: int
+}
+
+struct FileExplorer {
+    entries: list<FileEntry>
+    selected: int
+    scroll: int
+    root_path: string
+}
+
+fn FileExplorer.new(root: string) -> FileExplorer {
+    let mut fe = FileExplorer {
+        entries: [],
+        selected: 0,
+        scroll: 0,
+        root_path: root
+    }
+    fe.refresh()
+    fe
+}
+
+fn FileExplorer.refresh(this: *FileExplorer) {
+    this.entries = []
+    this.add_dir(this.root_path, 0)
+    if this.selected >= this.entries.len() {
+        this.selected = this.entries.len().saturating_sub(1)
+    }
+}
+
+fn FileExplorer.add_dir(this: *FileExplorer, path: string, depth: int) {
+    let entries = fs.read_dir(path)
+    if entries.is_err() { return }
+    let entries = entries.unwrap()
+    entries.sort()
+    for entry in entries {
+        let full = path + "/" + entry.name
+        let is_dir = fs.is_dir(full)
+        let fe = FileEntry {
+            name: entry.name,
+            path: full,
+            is_dir: is_dir,
+            expanded: false,
+            depth: depth
+        }
+        this.entries.push(fe)
+    }
+}
+
+fn FileExplorer.move_up(this: *FileExplorer) {
+    if this.selected > 0 {
+        this.selected--
+    }
+}
+
+fn FileExplorer.move_down(this: *FileExplorer) {
+    if this.selected + 1 < this.entries.len() {
+        this.selected++
+    }
+}
+
+fn FileExplorer.toggle(this: *FileExplorer) {
+    let entry = &mut this.entries[this.selected]
+    if entry.is_dir {
+        entry.expanded = !entry.expanded
+        if entry.expanded {
+            // Expand - add children
+            let idx = this.selected + 1
+            let entries = fs.read_dir(entry.path)
+            if entries.is_ok() {
+                let children = entries.unwrap()
+                children.sort()
+                for child in children {
+                    let full = entry.path + "/" + child.name
+                    let is_dir = fs.is_dir(full)
+                    let fe = FileEntry {
+                        name: child.name,
+                        path: full,
+                        is_dir: is_dir,
+                        expanded: false,
+                        depth: entry.depth + 1
+                    }
+                    this.entries.insert(idx, fe)
+                    idx++
+                }
+            }
+        } else {
+            // Collapse - remove children
+            let mut i = this.selected + 1
+            while i < this.entries.len() && this.entries[i].depth > entry.depth {
+                this.entries.remove(i)
+            }
+        }
+    }
+}
+
+fn FileExplorer.get_selected_path(this: *FileExplorer) -> string? {
+    if this.selected < this.entries.len() {
+        Some(this.entries[this.selected].path)
+    } else {
+        None
+    }
+}
+
+// ============================================================
+// REPL Panel
+// ============================================================
+
+struct ReplPanel {
+    history: list<string>
+    history_index: int
+    input_buffer: string
+    output_lines: list<string>
+    scroll: int
+    process: Process?
+}
+
+fn ReplPanel.new() -> ReplPanel {
+    ReplPanel {
+        history: [],
+        history_index: 0,
+        input_buffer: "",
+        output_lines: ["Forge REPL v1.0", "Type 'exit' to quit", ""],
+        scroll: 0,
+        process: None
+    }
+}
+
+fn ReplPanel.run_command(this: *ReplPanel, cmd: string) {
+    this.history.push(cmd)
+    this.history_index = this.history.len()
+    this.output_lines.push(">> " + cmd)
+    
+    if cmd == "exit" || cmd == "quit" {
+        os.exit(0)
+    }
+    
+    // Run in Forge REPL
+    let result = repl.run(cmd)
+    if result.is_ok() {
+        let out = result.unwrap()
+        if out != "" {
+            for line in out.lines() {
+                this.output_lines.push(line)
+            }
+        }
+    } else {
+        this.output_lines.push("Error: " + result.unwrap_err())
+    }
+    this.output_lines.push("")
+    this.scroll_to_bottom()
+}
+
+fn ReplPanel.scroll_to_bottom(this: *ReplPanel) {
+    this.scroll = max(0, this.output_lines.len() as int - 20)
+}
+
+// ============================================================
+// Status Bar
+// ============================================================
+
+fn render_status_bar(editor: Editor, theme: Theme, width: int) -> string {
+    let mode = if editor.modified { "● " } else { "  " }
+    let filename = editor.filepath.unwrap_or("untitled")
+    let lang = "Forge"
+    let pos = "Ln " + (editor.cursor_line + 1).to_string() + ", Col " + (editor.cursor_col + 1).to_string()
+    let total = editor.lines.len().to_string() + " lines"
+    let time = os.time().format("%H:%M:%S")
+    
+    let left = mode + filename + " | " + lang + " | " + pos + " | " + total
+    let right = time
+    
+    let fill = width - left.len() - right.len()
+    left + " ".repeat(max(1, fill)) + right
+}
+
+// ============================================================
+// Main Application
+// ============================================================
+
+struct App {
+    editor: Editor
+    explorer: FileExplorer
+    repl: ReplPanel
+    terminal: Terminal
+    theme_name: string
+    show_explorer: bool
+    show_repl: bool
+    show_terminal: bool
+    active_panel: string  // "editor", "explorer", "repl", "terminal"
+    command_mode: bool
+    command_buffer: string
+    status_message: string
+    status_time: float
+    running: bool
+}
+
+fn App.new(root_path: string) -> App {
+    App {
+        editor: Editor.new(),
+        explorer: FileExplorer.new(root_path),
+        repl: ReplPanel.new(),
+        terminal: Terminal.new(),
+        theme_name: "dark",
+        show_explorer: true,
+        show_repl: false,
+        show_terminal: false,
+        active_panel: "editor",
+        command_mode: false,
+        command_buffer: "",
+        status_message: "",
+        status_time: 0.0,
+        running: true
+    }
+}
+
+fn App.run(this: *App) {
+    // Initialize terminal
+    ui.init()
+    ui.enable_raw_mode()
+    ui.enable_mouse()
+    ui.enter_alt_screen()
+    
+    // Load initial file if provided
+    // ...
+    
+    defer {
+        ui.exit_alt_screen()
+        ui.disable_mouse()
+        ui.disable_raw_mode()
+    }
+    
+    let last_frame = os.time()
+    
+    while this.running {
+        let now = os.time()
+        let dt = now - last_frame
+        last_frame = now
+        
+        // Handle input
+        this.handle_input()
+        
+        // Update
+        this.update(dt)
+        
+        // Render
+        this.render()
+        
+        // Target 60 FPS
+        let frame_time = os.time() - now
+        if frame_time < 16 {
+            os.sleep(16 - frame_time)
+        }
+    }
+}
+
+fn App.handle_input(this: *App) {
+    while ui.poll_event() {
+        let event = ui.get_event()
+        
+        match event.type {
+            KeyDown => this.handle_key(event.key),
+            MouseDown => this.handle_mouse(event.mouse),
+            Resize => this.handle_resize(event.width, event.height),
+            _ => {}
+        }
+    }
+}
+
+fn App.handle_key(this: *App, key: KeyEvent) {
+    if this.command_mode {
+        this.handle_command_key(key)
+        return
+    }
+    
+    // Global shortcuts
+    if key.ctrl && key.code == 'q' {
+        this.running = false
+        return
+    }
+    if key.ctrl && key.code == 's' {
+        this.editor.save()
+        this.set_status("Saved")
+        return
+    }
+    if key.ctrl && key.code == 'o' {
+        this.prompt_open()
+        return
+    }
+    if key.ctrl && key.code == 'n' {
+        this.new_file()
+        return
+    }
+    if key.ctrl && key.code == 'f' {
+        this.command_mode = true
+        this.command_buffer = "/"
+        return
+    }
+    if key.ctrl && key.code == 'g' {
+        this.command_mode = true
+        this.command_buffer = ":"
+        return
+    }
+    if key.ctrl && key.code == 't' {
+        this.cycle_theme()
+        return
+    }
+    if key.ctrl && key.code == 'e' {
+        this.show_explorer = !this.show_explorer
+        return
+    }
+    if key.ctrl && key.code == 'r' {
+        this.show_repl = !this.show_repl
+        return
+    }
+    if key.code == Key::F5 {
+        this.show_repl = !this.show_repl
+        return
+    }
+    if key.code == Key::F9 {
+        this.run_file()
+        return
+    }
+    if key.code == Key::F11 {
+        this.show_terminal = !this.show_terminal
+        return
+    }
+    if key.code == Key::Tab && key.shift {
+        // Switch panels
+        match this.active_panel {
+            "editor" => this.active_panel = "explorer"
+            "explorer" => this.active_panel = if this.show_repl { "repl" } else { "editor" }
+            "repl" => this.active_panel = if this.show_terminal { "terminal" } else { "editor" }
+            "terminal" => this.active_panel = "editor"
+            _ => this.active_panel = "editor"
+        }
+        return
+    }
+    if key.code == Key::Tab && !key.shift {
+        this.active_panel = match this.active_panel {
+            "editor" => if this.show_repl { "repl" } else if this.show_terminal { "terminal" } else { "explorer" }
+            "explorer" => "editor"
+            "repl" => if this.show_terminal { "terminal" } else { "editor" }
+            "terminal" => "editor"
+            _ => "editor"
+        }
+        return
+    }
+    if key.code == Key::Escape {
+        this.active_panel = "editor"
+        return
+    }
+    
+    // Panel-specific
+    match this.active_panel {
+        "editor" => this.handle_editor_key(key)
+        "explorer" => this.handle_explorer_key(key)
+        "repl" => this.handle_repl_key(key)
+        "terminal" => this.handle_terminal_key(key)
+    }
+}
+
+fn App.handle_editor_key(this: *App, key: KeyEvent) {
+    if key.ctrl && key.code == 'z' {
+        if key.shift { this.editor.redo() } else { this.editor.undo() }
+    } else if key.ctrl && key.code == 'y' {
+        this.editor.redo()
+    } else if key.ctrl && key.code == 'a' {
+        this.editor.select_all()
+    } else if key.ctrl && key.code == 'd' {
+        this.editor.duplicate_line()
+    } else if key.ctrl && key.code == '/' {
+        this.editor.toggle_comment()
+    } else if key.ctrl && key.code == Key::Enter {
+        this.editor.insert_newline()
+    } else if key.ctrl && key.code == Key::Backspace {
+        this.editor.delete_word_left()
+    } else if key.ctrl && key.code == Key::Delete {
+        this.editor.delete_word_right()
+    } else if key.ctrl && key.code == Key::Left {
+        this.editor.move_word_left()
+    } else if key.ctrl && key.code == Key::Right {
+        this.editor.move_word_right()
+    } else if key.ctrl && key.code == Key::Home {
+        this.editor.move_to_start()
+    } else if key.ctrl && key.code == Key::End {
+        this.editor.move_to_end()
+    } else {
+        match key.code {
+            Key::Up => this.editor.move_up()
+            Key::Down => this.editor.move_down()
+            Key::Left => this.editor.move_left()
+            Key::Right => this.editor.move_right()
+            Key::Home => this.editor.move_home()
+            Key::End => this.editor.move_end()
+            Key::PageUp => this.editor.page_up(this.get_editor_height())
+            Key::PageDown => this.editor.page_down(this.get_editor_height())
+            Key::Enter => this.editor.insert_newline()
+            Key::Backspace => this.editor.backspace()
+            Key::Delete => this.editor.delete_char()
+            Key::Tab => this.editor.insert_tab()
+            Key::Char(c) => this.editor.insert_char(c)
+            _ => {}
+        }
+    }
+    
+    // Update scroll to keep cursor visible
+    this.editor.ensure_cursor_visible(this.get_editor_height(), this.get_editor_width())
+}
+
+fn App.handle_explorer_key(this: *App, key: KeyEvent) {
+    match key.code {
+        Key::Up => this.explorer.move_up()
+        Key::Down => this.explorer.move_down()
+        Key::Enter => {
+            let path = this.explorer.get_selected_path()
+            if path.is_some() {
+                let p = path.unwrap()
+                if fs.is_dir(p) {
+                    this.explorer.toggle()
+                } else {
+                    this.editor.load_file(p)
+                    this.active_panel = "editor"
+                }
+            }
+        }
+        Key::Right => this.explorer.toggle()
+        Key::Left => this.explorer.toggle()
+        _ => {}
+    }
+}
+
+fn App.handle_repl_key(this: *App, key: KeyEvent) {
+    if key.code == Key::Enter && !key.shift {
+        let cmd = this.repl.input_buffer.trim()
+        if cmd != "" {
+            this.repl.run_command(cmd)
+            this.repl.input_buffer = ""
+        }
+    } else if key.code == Key::Backspace {
+        if this.repl.input_buffer.len() > 0 {
+            this.repl.input_buffer.pop()
+        }
+    } else if key.code == Key::Up {
+        if this.repl.history_index > 0 {
+            this.repl.history_index--
+            this.repl.input_buffer = this.repl.history[this.repl.history_index]
+        }
+    } else if key.code == Key::Down {
+        if this.repl.history_index + 1 < this.repl.history.len() {
+            this.repl.history_index++
+            this.repl.input_buffer = this.repl.history[this.repl.history_index]
+        } else {
+            this.repl.history_index = this.repl.history.len()
+            this.repl.input_buffer = ""
+        }
+    } else if key.is_char() {
+        this.repl.input_buffer.push(key.char)
+    }
+}
+
+fn App.handle_terminal_key(this: *App, key: KeyEvent) {
+    this.terminal.handle_key(key)
+}
+
+fn App.handle_command_key(this: *App, key: KeyEvent) {
+    if key.code == Key::Escape {
+        this.command_mode = false
+        this.command_buffer = ""
+    } else if key.code == Key::Enter {
+        this.execute_command(this.command_buffer)
+        this.command_mode = false
+        this.command_buffer = ""
+    } else if key.code == Key::Backspace {
+        if this.command_buffer.len() > 0 {
+            this.command_buffer.pop()
+        }
+    } else if key.is_char() {
+        this.command_buffer.push(key.char)
+    }
+}
+
+fn App.execute_command(this: *App, cmd: string) {
+    if cmd.starts_with("/") {
+        // Search
+        let query = cmd.substr(1)
+        this.editor.search(query)
+    } else if cmd.starts_with(":") {
+        let parts = cmd.substr(1).split(' ')
+        match parts[0] {
+            "w" | "write" => this.editor.save()
+            "q" | "quit" => this.running = false
+            "wq" => { this.editor.save(); this.running = false }
+            "e" | "edit" => if parts.len() > 1 { this.editor.load_file(parts[1]) }
+            "n" | "new" => this.new_file()
+            "theme" => if parts.len() > 1 { this.set_theme(parts[1]) }
+            "explorer" => this.show_explorer = !this.show_explorer
+            "repl" => this.show_repl = !this.show_repl
+            "terminal" => this.show_terminal = !this.show_terminal
+            "run" => this.run_file()
+            _ => this.set_status("Unknown command: " + parts[0])
+        }
+    }
+}
+
+fn App.run_file(this: *App) {
+    if this.editor.filepath.is_some() {
+        this.editor.save()
+        let path = this.editor.filepath.unwrap()
+        this.repl.run_command("forge run " + path)
+        this.show_repl = true
+        this.active_panel = "repl"
+    } else {
+        this.set_status("Save file first")
+    }
+}
+
+fn App.new_file(this: *App) {
+    this.editor = Editor.new()
+    this.active_panel = "editor"
+}
+
+fn App.cycle_theme(this: *App) {
+    let themes = ["dark", "dracula", "nord", "light"]
+    let idx = themes.index_of(this.theme_name)
+    this.theme_name = themes[(idx + 1) % themes.len()]
+    theme = THEMES[this.theme_name]
+    this.set_status("Theme: " + this.theme_name)
+}
+
+fn App.set_theme(this: *App, name: string) {
+    if THEMES[name].is_some() {
+        this.theme_name = name
+        theme = THEMES[name].unwrap()
+        this.set_status("Theme: " + name)
+    }
+}
+
+fn App.set_status(this: *App, msg: string) {
+    this.status_message = msg
+    this.status_time = os.time() + 3.0
+}
+
+fn App.prompt_open(this: *App) {
+    this.command_mode = true
+    this.command_buffer = ":e "
+}
+
+fn App.update(this: *App, dt: float) {
+    // Update status message timer
+    if this.status_time > 0 && os.time() > this.status_time {
+        this.status_message = ""
+        this.status_time = 0
+    }
+    
+    // Blink cursor
+    // ...
+}
+
+fn App.render(this: *App) {
+    let (w, h) = ui.get_size()
+    let theme = THEMES[this.theme_name]
+    
+    // Clear
+    ui.clear(theme.editor_bg)
+    
+    // Calculate layout
+    let menu_h = 1
+    let status_h = 1
+    let explorer_w = if this.show_explorer { 28 } else { 0 }
+    let repl_h = if this.show_repl { 12 } else { 0 }
+    let term_h = if this.show_terminal { 10 } else { 0 }
+    
+    let editor_x = explorer_w
+    let editor_y = menu_h
+    let editor_w = w - explorer_w
+    let editor_h = h - menu_h - status_h - repl_h - term_h
+    
+    // Menu bar
+    this.render_menu_bar(w, theme)
+    
+    // Explorer
+    if this.show_explorer {
+        this.render_explorer(0, menu_h, explorer_w, editor_h + repl_h + term_h, theme)
+    }
+    
+    // Editor
+    this.render_editor(editor_x, editor_y, editor_w, editor_h, theme)
+    
+    // REPL
+    if this.show_repl {
+        let repl_y = editor_y + editor_h
+        this.render_repl(0, repl_y, w, repl_h, theme)
+    }
+    
+    // Terminal
+    if this.show_terminal {
+        let term_y = h - status_h - term_h
+        this.render_terminal(0, term_y, w, term_h, theme)
+    }
+    
+    // Status bar
+    this.render_status_bar(w, h, theme)
+    
+    // Command prompt
+    if this.command_mode {
+        this.render_command_prompt(w, h, theme)
+    }
+    
+    // Prompt dialogs
+    // ...
+    
+    ui.present()
+}
+
+fn App.render_menu_bar(this: *App, w: int, theme: Theme) {
+    ui.draw_rect(0, 0, w, 1, theme.menu_bg)
+    let menus = [" FILE ", " EDIT ", " VIEW ", " RUN ", " TOOLS ", " HELP "]
+    let mut x = 2
+    for (i, m) in menus.enumerate() {
+        if this.active_panel == "menu" && i == this.menu_selection {
+            ui.draw_text(x, 0, m, theme.menu_sel_bg, theme.menu_fg, true)
+        } else {
+            ui.draw_text(x, 0, m, theme.menu_bg, theme.menu_fg, false)
+        }
+        x += m.len() + 2
+    }
+    
+    // File name
+    let fname = this.editor.filepath.unwrap_or("untitled")
+    let fname_display = if this.editor.modified { "● " + fname } else { "  " + fname }
+    ui.draw_text(w - fname_display.len() - 2, 0, fname_display, theme.menu_bg, theme.menu_fg, false)
+}
+
+fn App.render_explorer(this: *App, x: int, y: int, w: int, h: int, theme: Theme) {
+    // Background
+    ui.draw_rect(x, y, w, h, theme.panel_bg)
+    
+    // Title
+    ui.draw_rect(x, y, w, 1, theme.panel_bg)
+    ui.draw_text(x + 1, y, " EXPLORER ", theme.panel_bg, theme.accent, true)
+    ui.draw_line(x, y + 1, x + w - 1, y + 1, theme.fg_comment)
+    
+    // Entries
+    let visible = h - 3
+    let start = this.explorer.scroll
+    let end = min(this.explorer.entries.len(), start + visible)
+    
+    for i in start..end {
+        let entry = &this.explorer.entries[i]
+        let row = y + 2 + i - start
+        let is_sel = i == this.explorer.selected
+        
+        if is_sel {
+            ui.draw_rect(x, row, w, 1, theme.selection)
+        }
+        
+        // Indent
+        let indent = entry.depth * 2
+        let prefix = if entry.is_dir {
+            if entry.expanded { "▼ " } else { "▶ " }
+        } else {
+            "  "
+        }
+        
+        let icon = if entry.is_dir { "📁 " } else if entry.name.ends_with(".fge") { "📄 " } else { "📄 " }
+        let name = entry.name
+        
+        let fg = if is_sel { theme.panel_fg } else if entry.is_dir { theme.accent } else { theme.panel_fg }
+        ui.draw_text(x + indent + 1, row, prefix + icon + name, 0, fg, false)
+    }
+}
+
+fn App.render_editor(this: *App, x: int, y: int, w: int, h: int, theme: Theme) {
+    // Background
+    ui.draw_rect(x, y, w, h, theme.editor_bg)
+    
+    let gutter_w = 6
+    let text_w = w - gutter_w - 1
+    let visible_lines = h
+    
+    // Adjust scroll
+    if this.editor.cursor_line < this.editor.scroll_line {
+        this.editor.scroll_line = this.editor.cursor_line
+    } else if this.editor.cursor_line >= this.editor.scroll_line + visible_lines {
+        this.editor.scroll_line = this.editor.cursor_line - visible_lines + 1
+    }
+    
+    // Gutter and text
+    for i in 0..visible_lines {
+        let line_idx = this.editor.scroll_line + i
+        let row = y + i
+        
+        if line_idx >= this.editor.lines.len() {
+            // Empty line marker
+            ui.draw_rect(x, row, gutter_w, 1, theme.gutter_bg)
+            ui.draw_text(x + gutter_w - 2, row, "~", theme.gutter_bg, theme.fg_comment, false)
+            continue
+        }
+        
+        // Gutter
+        let is_current = line_idx == this.editor.cursor_line
+        if is_current {
+            ui.draw_rect(x, row, gutter_w, 1, theme.accent)
+            ui.draw_text(x + 1, row, (line_idx + 1).to_string().pad_left(4), theme.accent, theme.editor_bg, true)
+        } else {
+            ui.draw_rect(x, row, gutter_w, 1, theme.gutter_bg)
+            ui.draw_text(x + 1, row, (line_idx + 1).to_string().pad_left(4), theme.gutter_bg, theme.fg_gutter, false)
+        }
+        
+        // Separator
+        ui.draw_text(x + gutter_w, row, "│", theme.gutter_bg, theme.fg_comment, false)
+        
+        // Text with syntax highlighting
+        let line = &this.editor.lines[line_idx]
+        let styles = this.editor.syntax_cache[line_idx]
+        
+        let mut col = 0
+        let mut style_idx = 0
+        for (j, ch) in line.chars().enumerate() {
+            if col >= this.editor.scroll_col && col < this.editor.scroll_col + text_w {
+                let sx = x + gutter_w + 1 + (col - this.editor.scroll_col)
+                if style_idx < styles.len() {
+                    let st = styles[style_idx]
+                    let bg = if is_current && j == this.editor.cursor_col { theme.cursor } else { st.bg }
+                    ui.draw_char(sx, row, ch, bg, st.fg, st.bold, st.italic)
+                } else {
+                    ui.draw_char(sx, row, ch, theme.editor_bg, theme.editor_fg, false)
+                }
+            }
+            col++
+            if style_idx + 1 < styles.len() && j + 1 == line.len() { /* noop */ }
+        }
+        
+        // Cursor
+        if is_current && this.editor.cursor_col >= this.editor.scroll_col && 
+           this.editor.cursor_col < this.editor.scroll_col + text_w {
+            let cx = x + gutter_w + 1 + (this.editor.cursor_col - this.editor.scroll_col)
+            ui.draw_rect(cx, row, 1, 1, theme.cursor)
+        }
+        
+        // Selection highlight
+        if this.editor.selection.is_some() {
+            let sel = this.editor.selection.unwrap()
+            let (sl, sc, el, ec) = if sel.start.line < sel.end.line || (sel.start.line == sel.end.line && sel.start.col < sel.end.col) {
+                (sel.start.line, sel.start.col, sel.end.line, sel.end.col)
+            } else {
+                (sel.end.line, sel.end.col, sel.start.line, sel.start.col)
+            }
+            
+            if line_idx >= sl && line_idx <= el {
+                let start_c = if line_idx == sl { sc } else { 0 }
+                let end_c = if line_idx == el { ec } else { line.len() }
+                
+                for j in start_c..end_c {
+                    if j >= this.editor.scroll_col && j < this.editor.scroll_col + text_w {
+                        let sx = x + gutter_w + 1 + (j - this.editor.scroll_col)
+                        ui.draw_rect(sx, row, 1, 1, theme.selection)
+                        // Redraw char on top
+                        if j < line.len() {
+                            let ch = line[j]
+                            let st = if style_idx < styles.len() { styles[style_idx] } else { default }
+                            ui.draw_char(sx, row, ch, theme.selection, st.fg, st.bold, st.italic)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Cursor blink
+    if (os.time() * 2) as int % 2 == 0 && this.active_panel == "editor" {
+        let line_idx = this.editor.cursor_line
+        if line_idx >= this.editor.scroll_line && line_idx < this.editor.scroll_line + visible_lines {
+            let row = y + line_idx - this.editor.scroll_line
+            if this.editor.cursor_col >= this.editor.scroll_col && 
+               this.editor.cursor_col < this.editor.scroll_col + text_w {
+                let cx = x + gutter_w + 1 + (this.editor.cursor_col - this.editor.scroll_col)
+                ui.draw_rect(cx, row, 1, 1, theme.cursor)
+            }
+        }
+    }
+}
+
+fn App.render_repl(this: *App, x: int, y: int, w: int, h: int, theme: Theme) {
+    // Separator
+    ui.draw_line(x, y - 1, x + w - 1, y - 1, theme.accent)
+    
+    // Background
+    ui.draw_rect(x, y, w, h, theme.panel_bg)
+    
+    // Title
+    ui.draw_rect(x, y, w, 1, theme.panel_bg)
+    ui.draw_text(x + 1, y, " REPL ", theme.panel_bg, theme.accent, true)
+    
+    // Output
+    let visible = h - 3
+    let start = this.repl.scroll
+    let end = min(this.repl.output_lines.len(), start + visible)
+    
+    for i in start..end {
+        let line = &this.repl.output_lines[i]
+        let row = y + 1 + i - start
+        let fg = if line.starts_with(">> ") { theme.accent }
+                 else if line.starts_with("Error") { theme.error }
+                 else { theme.panel_fg }
+        ui.draw_text(x + 1, row, line, 0, fg, false)
+    }
+    
+    // Input
+    let input_row = y + h - 1
+    ui.draw_text(x + 1, input_row, "forge> " + this.repl.input_buffer + "█", 0, theme.panel_fg, false)
+}
+
+fn App.render_terminal(this: *App, x: int, y: int, w: int, h: int, theme: Theme) {
+    // Similar to REPL but with terminal emulation
+    this.terminal.render(x, y, w, h, theme)
+}
+
+fn App.render_status_bar(this: *App, w: int, h: int, theme: Theme) {
+    let row = h - 1
+    let status = render_status_bar(this.editor, theme, w)
+    ui.draw_rect(0, row, w, 1, theme.status_bg)
+    ui.draw_text(0, row, status, theme.status_bg, theme.status_fg, true)
+}
+
+fn App.render_command_prompt(this: *App, w: int, h: int, theme: Theme) {
+    let pw = 60
+    let ph = 3
+    let px = (w - pw) / 2
+    let py = (h - ph) / 2
+    
+    // Box
+    ui.draw_rect(px, py, pw, ph, theme.panel_bg)
+    ui.draw_box(px, py, pw, ph, theme.accent)
+    
+    // Title
+    let title = if this.command_buffer.starts_with("/") { " Search " }
+                else if this.command_buffer.starts_with(":") { " Command " }
+                else { " Command " }
+    ui.draw_text(px + (pw - title.len()) / 2, py, title, theme.panel_bg, theme.accent, true)
+    
+    // Input
+    ui.draw_text(px + 2, py + 1, this.command_buffer + "█", 0, theme.panel_fg, false)
+    
+    // Hint
+    ui.draw_text(px + 2, py + 2, "Enter=execute  Esc=cancel", 0, theme.fg_comment, false)
+}
+
+// ============================================================
+// Entry Point
+// ============================================================
+
+fn main() {
+    let args = os.args()
+    let root = if args.len() > 1 { args[1] } else { os.cwd() }
+    
+    let mut app = App.new(root)
+    
+    // Load file if provided
+    if args.len() > 2 {
+        app.editor.load_file(args[2])
+    }
+    
+    app.run()
+}

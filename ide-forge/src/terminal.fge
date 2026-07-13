@@ -1,0 +1,255 @@
+// Terminal Module - PTY-based terminal emulator
+
+struct Terminal {
+    rows: int
+    cols: int
+    buffer: list<string>
+    cursor_x: int
+    cursor_y: int
+    scroll: int
+    process: Process?
+    active: bool
+}
+
+fn Terminal.new(rows: int, cols: int) -> Terminal {
+    Terminal {
+        rows: rows,
+        cols: cols,
+        buffer: [],
+        cursor_x: 0,
+        cursor_y: 0,
+        scroll: 0,
+        process: None,
+        active: false,
+    }
+}
+
+fn Terminal.resize(this: *Terminal, rows: int, cols: int) {
+    this.rows = rows
+    this.cols = cols
+    if this.process.is_some() {
+        this.process.unwrap().resize(rows, cols)
+    }
+}
+
+fn Terminal.spawn(this: *Terminal, cmd: string = "", args: list<string> = []) -> Result<(), string> {
+    let shell = if cmd == "" {
+        env("SHELL").unwrap_or("/bin/bash")
+    } else {
+        cmd
+    }
+    
+    let proc = os.spawn(shell, if args.is_empty() { [] } else { args })
+    if proc.is_err() {
+        return Err(proc.unwrap_err())
+    }
+    
+    this.process = Some(proc.unwrap())
+    this.active = true
+    
+    // Start reading output
+    this.start_output_thread()
+    Ok(())
+}
+
+fn Terminal.start_output_thread(this: *Terminal) {
+    if this.process.is_none() { return }
+    let proc = this.process.unwrap()
+    
+    // Spawn thread to read stdout
+    thread::spawn(move || {
+        let mut buf = [0u8; 4096]
+        loop {
+            let n = proc.stdout.read(&mut buf)
+            if n <= 0 { break }
+            let data = String::from_utf8_lossy(&buf[..n])
+            // Send to terminal buffer
+            // This would need thread-safe buffer access
+        }
+    })
+    
+    // Spawn thread to read stderr
+    thread::spawn(move || {
+        let mut buf = [0u8; 4096]
+        loop {
+            let n = proc.stderr.read(&mut buf)
+            if n <= 0 { break }
+            let data = String::from_utf8_lossy(&buf[..n])
+            // Send to terminal buffer
+        }
+    })
+}
+
+fn Terminal.write(this: *Terminal, data: string) {
+    if this.process.is_some() {
+        this.process.unwrap().stdin.write(data)
+    }
+}
+
+fn Terminal.handle_key(this: *Terminal, key: KeyEvent) {
+    if this.process.is_none() { return }
+    
+    match key.code {
+        Key::Enter => this.write("\n"),
+        Key::Backspace => this.write("\x7f"),
+        Key::Tab => this.write("\t"),
+        Key::Escape => this.write("\x1b"),
+        Key::Up => this.write("\x1b[A"),
+        Key::Down => this.write("\x1b[B"),
+        Key::Right => this.write("\x1b[C"),
+        Key::Left => this.write("\x1b[D"),
+        Key::Home => this.write("\x1b[H"),
+        Key::End => this.write("\x1b[F"),
+        Key::PageUp => this.write("\x1b[5~"),
+        Key::PageDown => this.write("\x1b[6~"),
+        Key::Delete => this.write("\x1b[3~"),
+        Key::Insert => this.write("\x1b[2~"),
+        Key::F1 => this.write("\x1b[OP"),
+        Key::F2 => this.write("\x1b[OQ"),
+        Key::F3 => this.write("\x1b[OR"),
+        Key::F4 => this.write("\x1b[OS"),
+        Key::F5 => this.write("\x1b[15~"),
+        Key::F6 => this.write("\x1b[17~"),
+        Key::F7 => this.write("\x1b[18~"),
+        Key::F8 => this.write("\x1b[19~"),
+        Key::F9 => this.write("\x1b[20~"),
+        Key::F10 => this.write("\x1b[21~"),
+        Key::F11 => this.write("\x1b[23~"),
+        Key::F12 => this.write("\x1b[24~"),
+        Key::Ctrl(c) => this.write(&(c as u8 + 96).to_string()), // Ctrl+A = 1, etc.
+        Key::Char(c) => {
+            let s = c.to_string()
+            if key.modifiers.ctrl {
+                if c.is_ascii_alphabetic() {
+                    this.write(&((c.to_ascii_lowercase() as u8 - b'a' + 1).to_string()))
+                }
+            } else {
+                this.write(s)
+            }
+        }
+        _ => {}
+    }
+}
+
+fn Terminal.resize_pty(this: *Terminal, rows: int, cols: int) {
+    if this.process.is_some() {
+        this.process.unwrap().resize(rows, cols)
+    }
+}
+
+fn Terminal.kill(this: *Terminal) {
+    if this.process.is_some() {
+        this.process.unwrap().kill()
+        this.process = None
+        this.active = false
+    }
+}
+
+fn Terminal.render(this: *Terminal, x: int, y: int, w: int, h: int, theme: Theme) {
+    // Background
+    ui.draw_rect(x, y, w, h, theme.editor_bg)
+    
+    // Title bar
+    ui.draw_rect(x, y, w, 1, theme.panel_bg)
+    ui.draw_text(x + 1, 0, " TERMINAL ", theme.panel_bg, theme.accent1, true)
+    ui.draw_hline(x, 1, w, theme.panel_border)
+    
+    // Content area
+    let content_y = 2
+    let content_h = h - 2
+    let content_w = w - 2
+    
+    // Draw buffer content
+    let visible = content_h
+    let start = this.scroll
+    let end = min(this.buffer.len(), start + visible)
+    
+    for i in start..end {
+        let line = &this.buffer[i]
+        let row = 2 + i - start
+        ui.draw_text(1, row, line, 0, 0xFFD4D4D4, false)
+    }
+    
+    // Cursor
+    if active {
+        let cursor_y = 2 + this.cursor_y - this.scroll
+        let cursor_x = 1 + this.cursor_x
+        if cursor_y >= 2 && cursor_y < 2 + content_h && cursor_x >= 1 && cursor_x < content_w {
+            ui.draw_rect(cursor_x, cursor_y, 1, 1, 0xFFA6A6A6)
+        }
+    }
+}
+
+fn Terminal.handle_key(this: *Terminal, key: KeyEvent) {
+    // Handle special keys first
+    match key.code {
+        Key::Up | Key::Down | Key::Left | Key::Right |
+        Key::Home | Key::End | Key::PageUp | Key::PageDown |
+        Key::Delete | Key::Insert | Key::F1 | Key::F2 | Key::F3 |
+        Key::F4 | Key::F5 | Key::F6 | Key::F7 | Key::F8 | Key::F9 |
+        Key::F10 | Key::F11 | Key::F12 => {
+            this.handle_key(key)
+        }
+        Key::Ctrl('c') => {
+            // Send SIGINT
+            if this.process.is_some() {
+                this.process.unwrap().kill(2) // SIGINT
+            }
+        }
+        Key::Ctrl('d') => {
+            // Send EOF
+            this.write("\x04")
+        }
+        Key::Ctrl('z') => {
+            // Send SIGTSTP
+            if this.process.is_some() {
+                this.process.unwrap().kill(20) // SIGTSTP
+            }
+        }
+        _ => {
+            this.handle_key(key)
+        }
+    }
+}
+
+fn Terminal.activate(this: *Terminal) {
+    this.active = true
+}
+
+fn Terminal.deactivate(this: *Terminal) {
+    this.active = false
+}
+
+fn Terminal.clear(this: *Terminal) {
+    this.buffer.clear()
+    this.cursor_x = 0
+    this.cursor_y = 0
+    this.scroll = 0
+}
+
+fn Terminal.clear_line(this: *Terminal) {
+    if this.cursor_y < this.buffer.len() {
+        this.buffer[this.cursor_y] = ""
+        this.cursor_x = 0
+    }
+}
+
+fn Terminal.scroll_up(this: *Terminal) {
+    if this.scroll > 0 {
+        this.scroll--
+    }
+}
+
+fn Terminal.scroll_down(this: *Terminal) {
+    if this.scroll + this.rows < this.buffer.len() {
+        this.scroll++
+    }
+}
+
+fn Terminal.page_up(this: *Terminal) {
+    this.scroll = max(0, this.scroll - this.rows)
+}
+
+fn Terminal.page_down(this: *Terminal) {
+    this.scroll = min(this.buffer.len() - this.rows, this.scroll + this.rows)
+}

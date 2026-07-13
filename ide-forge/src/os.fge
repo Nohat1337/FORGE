@@ -1,0 +1,337 @@
+// OS Module - Operating system interface
+
+fn exit(code: int = 0) {
+    native_os_exit(code)
+}
+
+fn sleep_ms(ms: int) {
+    native_sleep_ms(ms)
+}
+
+fn sleep(seconds: float) {
+    native_sleep(seconds)
+}
+
+fn time() -> float {
+    native_time()
+}
+
+fn time_ms() -> int {
+    native_time_ms()
+}
+
+fn time_ns() -> int {
+    native_time_ns()
+}
+
+fn format_time(t: float, format: string = "%Y-%m-%d %H:%M:%S") -> string {
+    native_format_time(t, format)
+}
+
+fn cwd() -> string {
+    native_cwd()
+}
+
+fn chdir(path: string) -> Result<(), string> {
+    native_chdir(path)
+}
+
+fn env(key: string) -> string? {
+    native_getenv(key)
+}
+
+fn set_env(key: string, value: string) -> Result<(), string> {
+    native_setenv(key, value)
+}
+
+fn remove_env(key: string) -> Result<(), string> {
+    native_unsetenv(key)
+}
+
+fn env_vars() -> map<string, string> {
+    native_environ()
+}
+
+fn args() -> list<string> {
+    native_args()
+}
+
+fn exec(cmd: string) -> Result<string, string> {
+    native_exec(cmd)
+}
+
+fn exec_with_args(cmd: string, args: list<string>) -> Result<string, string> {
+    native_exec_with_args(cmd, args)
+}
+
+fn spawn(cmd: string, args: list<string>) -> Result<Process, string> {
+    native_spawn(cmd, args)
+}
+
+fn kill(pid: int, signal: int = 15) -> Result<(), string> {
+    native_kill(pid, signal)
+}
+
+fn pid() -> int {
+    native_pid()
+}
+
+fn ppid() -> int {
+    native_ppid()
+}
+
+fn home_dir() -> string {
+    env("HOME").unwrap_or(env("USERPROFILE").unwrap_or("."))
+}
+
+fn temp_dir() -> string {
+    env("TMPDIR").unwrap_or(env("TEMP").unwrap_or("/tmp"))
+}
+
+fn temp_file(prefix: string = "tmp") -> string {
+    native_temp_file(prefix)
+}
+
+struct Process {
+    pid: int
+    stdin: Stdin?
+    stdout: Stdout?
+    stderr: Stderr?
+}
+
+struct Stdin {
+    fn write(self: *Stdin, data: string) -> Result<(), string>
+    fn close(self: *Stdin) -> Result<(), string>
+}
+
+struct Stdout {
+    fn read(self: *Stdout) -> Result<string, string>
+    fn read_line(self: *Stdout) -> Result<string, string>
+}
+
+struct Stderr {
+    fn read(self: *Stderr) -> Result<string, string>
+    fn read_line(self: *Stderr) -> Result<string, string>
+}
+
+fn wait(self: *Process) -> Result<int, string> {
+    native_wait(self.pid)
+}
+
+fn kill(self: *Process, signal: int = 15) -> Result<(), string> {
+    kill(self.pid, signal)
+}
+
+fn stdin() -> Stdin {
+    native_stdin()
+}
+
+fn stdout() -> Stdout {
+    native_stdout()
+}
+
+fn stderr() -> Stderr {
+    native_stderr()
+}
+
+fn read_line() -> string {
+    native_read_line()
+}
+
+fn read_password(prompt: string = "") -> string {
+    native_read_password(prompt)
+}
+
+fn read_char() -> char {
+    native_read_char()
+}
+
+fn read_password_masked(prompt: string = "", mask: char = '*') -> string {
+    native_read_password_masked(prompt, mask)
+}
+
+fn getpass(prompt: string) -> string {
+    read_password_masked(prompt, '*')
+}
+
+fn whoami() -> string {
+    env("USER").unwrap_or(env("USERNAME").unwrap_or("unknown"))
+}
+
+fn hostname() -> string {
+    native_hostname()
+}
+
+fn platform() -> string {
+    #if target_os = "linux"
+        "linux"
+    #elif target_os = "macos"
+        "macos"
+    #elif target_os = "windows"
+        "windows"
+    #else
+        "unknown"
+    #endif
+}
+
+fn arch() -> string {
+    #if target_arch = "x86_64"
+        "x86_64"
+    #elif target_arch = "aarch64"
+        "aarch64"
+    #else
+        "unknown"
+    #endif
+}
+
+fn num_cpus() -> int {
+    native_num_cpus()
+}
+
+fn loadavg() -> (float, float, float) {
+    native_loadavg()
+}
+
+fn uptime() -> float {
+    native_uptime()
+}
+
+fn memory_info() -> map<string, int> {
+    native_memory_info()
+}
+
+fn disk_usage(path: string) -> (total: int, free: int, available: int) {
+    native_disk_usage(path)
+}
+
+fn network_interfaces() -> list<map<string, string>> {
+    native_network_interfaces()
+}
+
+fn clipboard_get() -> string {
+    native_clipboard_get()
+}
+
+fn clipboard_set(text: string) -> Result<(), string> {
+    native_clipboard_set(text)
+}
+
+fn open_url(url: string) -> Result<(), string> {
+    native_open_url(url)
+}
+
+fn show_message(title: string, message: string) -> Result<(), string> {
+    native_show_message(title, message)
+}
+
+fn show_confirm(title: string, message: string) -> Result<bool, string> {
+    native_show_confirm(title, message)
+}
+
+fn show_input(title: string, message: string, default: string = "") -> Result<string, string> {
+    native_show_input(title, message, default)
+}
+
+fn file_dialog_open(dir: string = "", filters: list<(string, string)> = []) -> string? {
+    native_file_dialog_open(dir, filters)
+}
+
+fn file_dialog_save(dir: string = "", filters: list<(string, string)> = [], default: string = "") -> string? {
+    native_file_dialog_save(dir, filters, default)
+}
+
+fn folder_dialog(title: string = "", dir: string = "") -> string? {
+    native_folder_dialog(title, dir)
+}
+
+fn cpu_info() -> map<string, string> {
+    native_cpu_info()
+}
+
+fn battery_info() -> map<string, int>? {
+    native_battery_info()
+}
+
+fn locale() -> string {
+    env("LANG").unwrap_or("en_US.UTF-8")
+}
+
+fn timezone() -> string {
+    env("TZ").unwrap_or("UTC")
+}
+
+fn timezone_offset() -> int {
+    native_timezone_offset()
+}
+
+fn rand() -> float {
+    native_rand()
+}
+
+fn rand_int(min: int, max: int) -> int {
+    native_rand_int(min, max)
+}
+
+fn rand_bytes(n: int) -> list<int> {
+    native_rand_bytes(n)
+}
+
+fn uuid() -> string {
+    native_uuid()
+}
+
+fn hash(data: string, algo: string = "sha256") -> string {
+    native_hash(data, algo)
+}
+
+fn hmac(key: string, data: string, algo: string = "sha256") -> string {
+    native_hmac(key, data, algo)
+}
+
+fn base64_encode(data: string) -> string {
+    native_base64_encode(data)
+}
+
+fn base64_decode(data: string) -> string? {
+    native_base64_decode(data)
+}
+
+fn url_encode(s: string) -> string {
+    native_url_encode(s)
+}
+
+fn url_decode(s: string) -> string {
+    native_url_decode(s)
+}
+
+fn json_encode(v: any) -> string {
+    native_json_encode(v)
+}
+
+fn json_decode(s: string) -> any? {
+    native_json_decode(s)
+}
+
+fn toml_encode(v: any) -> string {
+    native_toml_encode(v)
+}
+
+fn toml_decode(s: string) -> any? {
+    native_toml_decode(s)
+}
+
+fn yaml_encode(v: any) -> string {
+    native_yaml_encode(v)
+}
+
+fn yaml_decode(s: string) -> any? {
+    native_yaml_decode(s)
+}
+
+fn compress(data: string, algo: string = "gzip") -> string {
+    native_compress(data, algo)
+}
+
+fn decompress(data: string, algo: string = "gzip") -> string? {
+    native_decompress(data, algo)
+}
