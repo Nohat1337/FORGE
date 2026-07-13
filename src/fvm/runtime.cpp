@@ -911,13 +911,26 @@ void FVM::executeOpcode(ThreadRef thread, Frame* frame, Opcode opcode) {
         case Opcode::NEW: {
             uint16_t index = frame->nextShort();
             // Create new object
-            // frame->push(Value(newObj.get()));
+            ClassRef clazz = frame->method->declaringClass->getClassLoader()->loadClass(
+                frame->method->declaringClass->stringConstants[index]
+            );
+            ObjectRef obj = std::make_shared<Object>(clazz);
+            // Initialize fields to default values
+            for (auto& field : obj->fields) {
+                field = Value(); // zero/null
+            }
+            frame->push(Value(obj.get()));
             break;
         }
         case Opcode::NEWARRAY: {
             uint8_t atype = frame->nextByte();
             int32_t count = frame->pop().intVal;
-            // Create array
+            // Create primitive array
+            ClassRef arrayClass = frame->method->declaringClass->getClassLoader()->loadClass("[" + getArrayTypeChar(atype));
+            ObjectRef arr = std::make_shared<Object>(frame->method->declaringClass->getClassLoader()->loadClass("[" + getArrayTypeChar(atype)));
+            arr->fields.resize(count + 1);
+            arr->fields[0] = Value(static_cast<int32_t>(count)); // length
+            frame->push(Value(arr.get()));
             break;
         }
         case Opcode::ANEWARRAY: {
@@ -948,20 +961,39 @@ void FVM::executeOpcode(ThreadRef thread, Frame* frame, Opcode opcode) {
         // Field access
         case Opcode::GETFIELD: {
             uint16_t index = frame->nextShort();
-            frame->pop(); // pop object ref
-            // Get field value
+            Value objRef = frame->pop();
+            if (!objRef.isObject()) {
+                throw std::runtime_error("GETFIELD: expected object reference");
+            }
+            ObjectRef obj = std::dynamic_pointer_cast<Object>(objRef.refVal);
+            if (!obj) throw std::runtime_error("GETFIELD: not an object");
+            // Get field index from constant pool
+            uint16_t fieldIndex = frame->method->declaringClass->getFieldIndex(index);
+            if (fieldIndex >= objRef->fields.size()) {
+                throw std::runtime_error("Invalid field index");
+            }
+            frame->push(obj->fields[fieldIndex]);
             break;
         }
         case Opcode::PUTFIELD: {
             uint16_t index = frame->nextShort();
             Value val = frame->pop();
-            frame->pop(); // pop object ref
-            // Set field value
+            Value objRef = frame->pop();
+            if (!objRef.isObject()) throw std::runtime_error("PUTFIELD: expected object reference");
+            ObjectRef obj = std::dynamic_pointer_cast<Object>(objRef.refVal);
+            // Get field index from constant pool
+            uint16_t fieldIndex = frame->method->declaringClass->getFieldIndex(index);
+            if (fieldIndex >= objRef->fields.size()) {
+                throw std::runtime_error("Invalid field index");
+            }
+            obj->fields[fieldIndex] = val;
             break;
         }
         case Opcode::GETSTATIC: {
             uint16_t index = frame->nextShort();
-            // Get static field
+            // Get static field from class
+            // For now, push a default value
+            frame->push(Value());
             break;
         }
         case Opcode::PUTSTATIC: {
