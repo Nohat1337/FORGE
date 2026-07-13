@@ -423,7 +423,6 @@ void Compiler::compileForIn(ForInStmt& stmt) {
     emitOpOperand16(OP_GET_LOCAL, (uint16_t)idxSlot);
     emitOp(OP_INDEX);
     emitOpOperand16(OP_SET_LOCAL, (uint16_t)varSlot);
-    emitOp(OP_POP);
 
     compileStatements(stmt.body);
 
@@ -431,7 +430,6 @@ void Compiler::compileForIn(ForInStmt& stmt) {
     emitConstant(Value::integer(1));
     emitOp(OP_ADD);
     emitOpOperand16(OP_SET_LOCAL, (uint16_t)idxSlot);
-    emitOp(OP_POP);
 
     emitLoop(loopStart);
     patchJump(exitJump);
@@ -500,6 +498,7 @@ void Compiler::compileExpression(ExprPtr expr) {
         Compiler& c;
         void operator()(IntegerLiteral& e) { c.compileIntegerLiteral(e); }
         void operator()(FloatLiteral& e) { c.compileFloatLiteral(e); }
+        void operator()(CharLiteral& e) { c.compileCharLiteral(e); }
         void operator()(StringLiteral& e) { c.compileStringLiteral(e); }
         void operator()(BoolLiteral& e) { c.compileBoolLiteral(e); }
         void operator()(NilLiteral& e) { c.compileNilLiteral(); }
@@ -528,6 +527,10 @@ void Compiler::compileExpression(ExprPtr expr) {
 
 void Compiler::compileIntegerLiteral(IntegerLiteral& e) {
     emitConstant(Value::integer(e.value));
+}
+
+void Compiler::compileCharLiteral(CharLiteral& e) {
+    emitConstant(Value::integer(static_cast<int64_t>(e.value)));
 }
 
 void Compiler::compileFloatLiteral(FloatLiteral& e) {

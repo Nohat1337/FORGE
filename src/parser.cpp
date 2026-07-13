@@ -391,6 +391,7 @@ ExprPtr Parser::parseCall() {
 
 ExprPtr Parser::parsePrimary() {
     if (check(TokenType::INTEGER)) { Token t = advance(); return makeExpr(IntegerLiteral{std::stoll(t.value)}); }
+    if (check(TokenType::CHAR)) { Token t = advance(); return makeExpr(CharLiteral{t.value[0]}); }
     if (check(TokenType::FLOAT)) { Token t = advance(); return makeExpr(FloatLiteral{std::stod(t.value)}); }
     if (check(TokenType::STRING_PART) || check(TokenType::DOLLAR_LBRACE) || check(TokenType::STRING_END)) return parseStringInterp();
     if (check(TokenType::TRUE)) { advance(); return makeExpr(BoolLiteral{true}); }

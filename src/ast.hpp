@@ -13,6 +13,7 @@ using StmtPtr = std::shared_ptr<Stmt>;
 
 struct IntegerLiteral { long long value; };
 struct FloatLiteral { double value; };
+struct CharLiteral { char value; };
 struct StringLiteral { std::string value; };
 struct BoolLiteral { bool value; };
 struct NilLiteral {};
@@ -132,7 +133,7 @@ struct AssignIndexExpr {
 
 struct Expr {
     using Variant = std::variant<
-        IntegerLiteral, FloatLiteral, StringLiteral, BoolLiteral, NilLiteral,
+        IntegerLiteral, FloatLiteral, CharLiteral, StringLiteral, BoolLiteral, NilLiteral,
         ThisLiteral, Identifier, BinaryExpr, UnaryExpr, TernaryExpr,
         CallExpr, IndexExpr, MemberExpr, ArrayLiteral, MapLiteral, FnExpr,
         SuperExpr, StringInterpExpr, MatchExpr, ThrowExpr, YieldExpr,

@@ -126,10 +126,31 @@ void Lexer::readString(std::vector<Token>& tokens) {
     if (pos_ >= (int)source_.size())
         throw std::runtime_error("Unterminated string at line " + std::to_string(startLine));
     advance();
-    if (!str.empty()) {
-        tokens.push_back({TokenType::STRING_PART, str, startLine, startCol});
+if (!str.empty()) {
+            tokens.push_back({TokenType::STRING_PART, str, startLine, startCol});
+        }
+        
+        tokens.push_back({TokenType::STRING_END, "", startLine, column_});
+}
+
+void Lexer::readChar(std::vector<Token>& tokens) {
+    int startCol = column_;
+    int startLine = line_;
+    advance(); // skip opening '
+    char c = advance();
+    if (c == '\\') {
+        c = advance();
+        switch (c) {
+            case 'n': c = '\n'; break; case 't': c = '\t'; break;
+            case '\\': c = '\\'; break; case '\'': c = '\''; break;
+            case '0': c = '\0'; break;
+            default: break;
+        }
     }
-    tokens.push_back({TokenType::STRING_END, "", startLine, column_});
+    if (pos_ >= (int)source_.size() || peek() != '\'')
+        throw std::runtime_error("Unterminated character literal at line " + std::to_string(startLine));
+    advance(); // skip closing '
+    tokens.push_back({TokenType::CHAR, std::string(1, c), startLine, startCol});
 }
 
 Token Lexer::readIdentifier() {
@@ -156,6 +177,7 @@ std::vector<Token> Lexer::tokenize() {
         char c = peek();
         if (std::isdigit(c)) { tokens.push_back(readNumber()); }
         else if (c == '"') { readString(tokens); }
+        else if (c == '\'') { readChar(tokens); }
         else if (std::isalpha(c) || c == '_') { tokens.push_back(readIdentifier()); }
         else {
             int startCol = column_;

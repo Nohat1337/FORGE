@@ -5,7 +5,7 @@
 #include <unordered_map>
 
 enum class TokenType {
-    INTEGER, FLOAT, STRING, IDENTIFIER,
+    INTEGER, FLOAT, CHAR, STRING, IDENTIFIER,
     STRING_PART, STRING_END,
     LET, CONST, FN, RETURN, IF, ELSE, WHILE, FOR, IN, TRUE, FALSE, NIL,
     AND, OR, NOT,
@@ -49,6 +49,7 @@ private:
     void skipWhitespace();
     Token readNumber();
     void readString(std::vector<Token>& tokens);
+    void readChar(std::vector<Token>& tokens);
     Token readIdentifier();
 
     Token makeToken(TokenType type, const std::string& value);

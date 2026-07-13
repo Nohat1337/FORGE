@@ -809,8 +809,8 @@ bool VM::interpret(std::shared_ptr<ObjFunction> function) {
                     uint16_t count = READ_UINT16();
                     auto map = std::make_shared<ObjMap>();
                     for (int i = 0; i < count; i++) {
-                        Value key = peek(2 * count - 1 - 2 * i);
-                        Value val = peek(2 * count - 2 - 2 * i);
+                        Value key = peek(2 * i + 1);
+                        Value val = peek(2 * i);
                         if (!key.isString()) {
                             if (!handleError("Map key must be a string")) return false;
                             break;

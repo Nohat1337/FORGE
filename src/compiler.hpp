@@ -87,6 +87,7 @@ private:
 
     void compileExpression(ExprPtr expr);
     void compileIntegerLiteral(IntegerLiteral& e);
+    void compileCharLiteral(CharLiteral& e);
     void compileFloatLiteral(FloatLiteral& e);
     void compileStringLiteral(StringLiteral& e);
     void compileBoolLiteral(BoolLiteral& e);
