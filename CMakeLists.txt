@@ -4,6 +4,7 @@ project(forge VERSION 2.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Main forge executable
 add_executable(forge
     src/main.cpp
     src/lexer.cpp

@@ -251,7 +251,7 @@ public:
     
     // For park/unpark
     std::mutex parkMutex;
-    std::condition_variable parkCV;
+    // std::condition_variable parkCV;
     bool parked = false;
     
     // Thread-local storage
@@ -274,7 +274,7 @@ public:
     // Stack trace
     std::string getStackTrace() const;
     
-    // Park/unpark
+    // Park/unpark - simplified
     void park();
     void unpark();
     
@@ -351,7 +351,7 @@ public:
     // Thread management
     ThreadRef createThread(const std::string& name, MethodRef entryPoint, const std::vector<Value>& args);
     ThreadRef currentThread();
-    void schedule();
+    // void schedule();
     
     // GC
     void gc();
@@ -381,10 +381,6 @@ public:
     void enableJIT(bool enable);
     void compileMethod(MethodRef method);
     
-    // UI Toolkit (like Swing/JavaFX)
-    class UIToolkit;
-    UIToolkit* getUIToolkit() { return uiToolkit.get(); }
-    
     // Stats
     struct Stats {
         uint64_t classesLoaded = 0;
@@ -398,10 +394,23 @@ public:
     Stats getStats() const;
     
 private:
+    // Internal methods - implemented
+    void executeThread(ThreadRef thread);
+    void executeOpcode(ThreadRef thread, Frame* frame, Opcode opcode);
+    
+    // Thread parking
+    void park();
+    void unpark();
+    
+    // Condition variable for thread parking
+    std::condition_variable parkCV;
+};
+    
+private:
     FVM();
     ~FVM();
     
-    std::unique_ptr<UIToolkit> uiToolkit;
+    // std::unique_ptr<UIToolkit> uiToolkit;
     std::vector<ThreadRef> allThreads;
     std::mutex threadsMutex;
     std::atomic<bool> running{false};

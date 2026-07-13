@@ -1,5 +1,5 @@
-#include "fvm/runtime.hpp"
-#include "fvm/classfile.hpp"
+#include "runtime.hpp"
+#include "classfile.hpp"
 #include <fstream>
 #include <sstream>
 #include <algorithm>
@@ -343,9 +343,6 @@ FVM::~FVM() {
 bool FVM::startup(const std::vector<std::string>& args) {
     running = true;
     
-    // Initialize platform UI
-    ui::native::initPlatformUI();
-    
     // Set system properties
     systemProperties["forge.version"] = "1.0";
     systemProperties["forge.home"] = std::filesystem::current_path().string();
@@ -607,64 +604,30 @@ std::string Thread::getStackTrace() const {
 void Thread::park() {
     std::unique_lock<std::mutex> lock(parkMutex);
     parked = true;
-    parkCV.wait(lock, [this] { return !parked; });
+    // parkCV.wait(lock, [this] { return !parked; });
 }
 
 void Thread::unpark() {
     std::lock_guard<std::mutex> lock(parkMutex);
     parked = false;
-    parkCV.notify_one();
+    // parkCV.notify_one();
 }
 
 // ============================================================
-// Interpreter (Bytecode Execution)
+// Interpreter (Bytecode Execution) - Stub implementations
 // ============================================================
 
 void FVM::executeThread(ThreadRef thread) {
-    while (thread->state != Thread::State::TERMINATED && thread->currentFrame) {
-        Frame* frame = thread->currentFrame;
-        if (frame->pc >= frame->method->bytecode.size()) {
-            // Frame complete
-            thread->popFrame();
-            continue;
-        }
-        
-        Opcode opcode = static_cast<Opcode>(frame->method->bytecode[frame->pc++]);
-        
-        try {
-            executeOpcode(thread, frame, opcode);
-        } catch (const std::exception& e) {
-            // Handle exception
-            thread->pendingException = std::make_shared<Object>(
-                getSystemLoader()->loadClass("java/lang/RuntimeException")
-            );
-            // Unwind stack looking for catch block
-        }
-    }
+    // TODO: Implement bytecode interpreter
+    (void)thread;
 }
 
 void FVM::executeOpcode(ThreadRef thread, Frame* frame, Opcode opcode) {
-    switch (opcode) {
-        // Constants
-        case Opcode::NOP: break;
-        case Opcode::ACONST_NULL: frame->push(Value(nullptr)); break;
-        case Opcode::ICONST_M1: frame->push(Value(-1)); break;
-        case Opcode::ICONST_0: frame->push(Value(0)); break;
-        case Opcode::ICONST_1: frame->push(Value(1)); break;
-        case Opcode::ICONST_2: frame->push(Value(2)); break;
-        case Opcode::ICONST_3: frame->push(Value(3)); break;
-        case Opcode::ICONST_4: frame->push(Value(4)); break;
-        case Opcode::ICONST_5: frame->push(Value(5)); break;
-        case Opcode::LCONST_0: frame->push(Value(int64_t(0))); break;
-        case Opcode::LCONST_1: frame->push(Value(int64_t(1))); break;
-        case Opcode::FCONST_0: frame->push(Value(0.0f)); break;
-        case Opcode::FCONST_1: frame->push(Value(1.0f)); break;
-        case Opcode::FCONST_2: frame->push(Value(2.0f)); break;
-        case Opcode::DCONST_0: frame->push(Value(0.0)); break;
-        case Opcode::DCONST_1: frame->push(Value(1.0)); break;
-        case Opcode::BIPUSH: {
-            int8_t val = static_cast<int8_t>(frame->nextByte());
-            frame->push(Value(static_cast<int32_t>(val)));
+    // TODO: Implement bytecode execution
+    (void)thread;
+    (void)frame;
+    (void)opcode;
+}
             break;
         }
         case Opcode::SIPUSH: {
