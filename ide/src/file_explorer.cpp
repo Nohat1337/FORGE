@@ -94,7 +94,7 @@ int FileExplorer::render(int startRow, int startCol, int height, int width, int 
 
     // Title bar
     output += ansi::move(startRow, startCol);
-    output += ansi::BG_PANEL + ansi::FG_BOLD_WHITE + ansi::BOLD;
+    output += ansi::bg256(234) + ansi::fg256(255) + ansi::BOLD;
     std::string title = " EXPLORER ";
     int pad = width - (int)title.size();
     output += title;
@@ -111,14 +111,14 @@ int FileExplorer::render(int startRow, int startCol, int height, int width, int 
     for (int i = 0; i < visibleHeight; i++) {
         int entryIdx = i + scrollOffset_;
         output += ansi::move(startRow + 1 + i, startCol);
-        output += ansi::BG_PANEL;
+        output += ansi::bg256(234);
 
         if (entryIdx < (int)entries_.size()) {
             const FileEntry& e = entries_[entryIdx];
             bool selected = (entryIdx == selectedIdx_);
 
             if (selected) {
-                output += ansi::BG_BLUE + ansi::FG_WHITE;
+                output += ansi::bg256(24) + ansi::fg256(255);
             }
 
             // Indentation
@@ -132,11 +132,11 @@ int FileExplorer::render(int startRow, int startCol, int height, int width, int 
 
             // Icon
             if (e.isDir) {
-                if (e.isExpanded) output += ansi::FG_YELLOW + std::string("[-] ") + ansi::RESET;
-                else output += ansi::FG_YELLOW + std::string("[+] ") + ansi::RESET;
+                if (e.isExpanded) output += ansi::fg256(214) + std::string("[-] ") + ansi::RESET;
+                else output += ansi::fg256(214) + std::string("[+] ") + ansi::RESET;
             } else {
                 if (isForgeFile(e.name)) {
-                    output += ansi::FG_BOLD_CYAN + std::string("* ") + ansi::RESET;
+                    output += ansi::fg256(117) + std::string("* ") + ansi::RESET;
                 } else {
                     output += "  ";
                 }
@@ -147,13 +147,13 @@ int FileExplorer::render(int startRow, int startCol, int height, int width, int 
             if (nameMaxWidth < 4) nameMaxWidth = 4;
             std::string displayName = truncate(e.name, nameMaxWidth);
 
-            if (selected) output += ansi::BG_BLUE + ansi::FG_WHITE;
-            else if (e.isDir) output += ansi::FG_BOLD_WHITE;
-            else if (isForgeFile(e.name)) output += ansi::FG_BOLD_CYAN;
-            else output += ansi::FG_WHITE;
+            if (selected) output += ansi::bg256(24) + ansi::fg256(255);
+            else if (e.isDir) output += ansi::fg256(255) + ansi::BOLD;
+            else if (isForgeFile(e.name)) output += ansi::fg256(117) + ansi::BOLD;
+            else output += ansi::fg256(255);
 
             output += displayName;
-            output += ansi::RESET + ansi::BG_PANEL;
+            output += ansi::RESET + ansi::bg256(234);
 
             // Fill rest of line
             int used = indent + (e.depth > 0 ? 2 : 0) + 2 + (int)displayName.size();

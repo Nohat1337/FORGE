@@ -14,9 +14,14 @@ namespace ansi {
 const std::string RESET     = "\033[0m";
 const std::string BOLD      = "\033[1m";
 const std::string DIM       = "\033[2m";
+const std::string ITALIC    = "\033[3m";
 const std::string UNDERLINE = "\033[4m";
+const std::string BLINK     = "\033[5m";
+const std::string REVERSE   = "\033[7m";
+const std::string HIDDEN    = "\033[8m";
+const std::string STRIKETHROUGH = "\033[9m";
 
-// Foreground
+// Foreground 16-color
 const std::string FG_BLACK   = "\033[30m";
 const std::string FG_RED     = "\033[31m";
 const std::string FG_GREEN   = "\033[32m";
@@ -37,7 +42,7 @@ const std::string FG_BOLD_MAGENTA = "\033[1;35m";
 const std::string FG_BOLD_CYAN    = "\033[1;36m";
 const std::string FG_BOLD_WHITE   = "\033[1;37m";
 
-// Background
+// Background 16-color
 const std::string BG_BLACK   = "\033[40m";
 const std::string BG_RED     = "\033[41m";
 const std::string BG_GREEN   = "\033[42m";
@@ -48,14 +53,13 @@ const std::string BG_CYAN    = "\033[46m";
 const std::string BG_WHITE   = "\033[47m";
 const std::string BG_GRAY    = "\033[100m";
 
-const std::string BG_SEL     = "\033[48;5;236m";
-const std::string BG_STATUS  = "\033[44;37;1m";
-const std::string BG_MENU    = "\033[48;5;235;37;1m";
-const std::string BG_PANEL   = "\033[48;5;234m";
-const std::string BG_INPUT   = "\033[48;5;236m";
+// 256-color helpers
+inline std::string fg256(int n) { return "\033[38;5;" + std::to_string(n) + "m"; }
+inline std::string bg256(int n) { return "\033[48;5;" + std::to_string(n) + "m"; }
 
-const std::string CLEAR      = "\033[2K";
-const std::string CLEAR_TO_END = "\033[K";
+// Truecolor (24-bit) helpers
+inline std::string fgRGB(int r, int g, int b) { return "\033[38;2;" + std::to_string(r) + ";" + std::to_string(g) + ";" + std::to_string(b) + "m"; }
+inline std::string bgRGB(int r, int g, int b) { return "\033[48;2;" + std::to_string(r) + ";" + std::to_string(g) + ";" + std::to_string(b) + "m"; }
 
 // Cursor movement
 inline std::string move(int row, int col) {
@@ -80,9 +84,22 @@ inline std::string mainScreen() { return "\033[?1049l"; }
 inline std::string enableMouse() { return "\033[?1003h\033[?1006h"; }
 inline std::string disableMouse() { return "\033[?1003l\033[?1006l"; }
 
-// Set 256-color background
-inline std::string bg256(int n) { return "\033[48;5;" + std::to_string(n) + "m"; }
-inline std::string fg256(int n) { return "\033[38;5;" + std::to_string(n) + "m"; }
+// Box drawing
+namespace box {
+    const std::string TL = "\u250C";  // ┌
+    const std::string TR = "\u2510";  // ┐
+    const std::string BL = "\u2514";  // └
+    const std::string BR = "\u2518";  // ┘
+    const std::string H  = "\u2500";  // ─
+    const std::string V  = "\u2502";  // │
+    const std::string T  = "\u252C";  // ┬
+    const std::string B  = "\u2534";  // ┴
+    const std::string L  = "\u251C";  // ├
+    const std::string R  = "\u2524";  // ┤
+    const std::string X  = "\u253C";  // ┼
+    const std::string LR = "\u2500";  // ─ (horizontal)
+    const std::string TB = "\u2502";  // │ (vertical)
+}
 
 } // namespace ansi
 
@@ -115,6 +132,32 @@ enum Key {
     KEY_F11,
     KEY_F12,
     KEY_MOUSE,
+    KEY_CTRL_A = 1,
+    KEY_CTRL_B = 2,
+    KEY_CTRL_C = 3,
+    KEY_CTRL_D = 4,
+    KEY_CTRL_E = 5,
+    KEY_CTRL_F = 6,
+    KEY_CTRL_G = 7,
+    KEY_CTRL_H = 8,
+    KEY_CTRL_I = 9,
+    KEY_CTRL_J = 10,
+    KEY_CTRL_K = 11,
+    KEY_CTRL_L = 12,
+    KEY_CTRL_M = 13,
+    KEY_CTRL_N = 14,
+    KEY_CTRL_O = 15,
+    KEY_CTRL_P = 16,
+    KEY_CTRL_Q = 17,
+    KEY_CTRL_R = 18,
+    KEY_CTRL_S = 19,
+    KEY_CTRL_T = 20,
+    KEY_CTRL_U = 21,
+    KEY_CTRL_V = 22,
+    KEY_CTRL_W = 23,
+    KEY_CTRL_X = 24,
+    KEY_CTRL_Y = 25,
+    KEY_CTRL_Z = 26,
 };
 
 struct TerminalSize {

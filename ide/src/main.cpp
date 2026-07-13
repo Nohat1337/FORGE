@@ -3,6 +3,7 @@
 #include "file_explorer.hpp"
 #include "repl.hpp"
 #include "syntax.hpp"
+#include "theme.hpp"
 #include <string>
 #include <cstring>
 #include <cstdlib>
@@ -11,6 +12,8 @@
 #include <signal.h>
 #include <ctime>
 #include <sys/wait.h>
+#include <vector>
+#include <algorithm>
 
 // App state
 static bool running = true;
@@ -22,7 +25,7 @@ static TerminalSize termSize;
 // Layout constants
 static const int MENU_HEIGHT = 1;
 static const int STATUS_HEIGHT = 1;
-static const int EXPLORER_WIDTH = 26;
+static const int EXPLORER_WIDTH = 28;
 static const int REPL_HEIGHT_DEFAULT = 12;
 
 // Menu bar
@@ -47,6 +50,10 @@ static double statusMessageTime = 0;
 
 // REPL panel state
 static bool replVisible = false;
+static bool minimapVisible = false;
+
+// Theme
+static Theme::Type currentTheme = Theme::Type::DARK;
 
 // Forward declarations
 static void render();
@@ -58,42 +65,9 @@ static void saveCurrentFile();
 static void newFile();
 static void showAbout();
 static void runCurrentFile();
-static void updateLayout();
-
-static double getTimeSeconds() {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_sec + ts.tv_nsec / 1e9;
-}
-
-static void setStatusMessage(const std::string& msg) {
-    statusMessage = msg;
-    statusMessageTime = getTimeSeconds();
-}
-
-// Detect forge binary path relative to IDE binary
-static std::string findForgeBinary() {
-    char exePath[PATH_MAX];
-    ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
-    if (len != -1) {
-        exePath[len] = '\0';
-        std::string dir = exePath;
-        size_t lastSlash = dir.rfind('/');
-        if (lastSlash != std::string::npos) {
-            dir = dir.substr(0, lastSlash);
-            std::string forgePath = dir + "/forge";
-            if (access(forgePath.c_str(), X_OK) == 0) {
-                return forgePath;
-            }
-            // Try parent build dir
-            forgePath = dir + "/../forge";
-            if (access(forgePath.c_str(), X_OK) == 0) {
-                return forgePath;
-            }
-        }
-    }
-    return "forge";
-}
+static void setStatusMessage(const std::string& msg);
+static std::string findForgeBinary();
+static double getTimeSeconds();
 
 int main(int argc, char* argv[]) {
     auto& term = Terminal::instance();
@@ -102,6 +76,10 @@ int main(int argc, char* argv[]) {
     term.enableMouse();
 
     termSize = term.getSize();
+
+    // Apply default theme
+    Theme::set(currentTheme);
+    editor.setTheme(currentTheme);
 
     fileExplorer.refresh();
 
@@ -158,42 +136,71 @@ static void render() {
     std::string output;
     output.reserve(termSize.rows * termSize.cols * 4);
 
+    const Theme::Colors& theme = Theme::getCurrent();
+
     output += ansi::hideCursor();
 
-    // Clear screen
+    // Clear screen with theme background
     output += ansi::move(1, 1);
-    output += ansi::BG_BLACK;
+    output += theme.bg_editor;
     for (int i = 0; i < termSize.rows; i++) {
         output += ansi::move(i + 1, 1);
         output += ansi::clearLine();
     }
 
-    // Menu bar
+    // Layout calculations
+    int replH = replVisible ? REPL_HEIGHT_DEFAULT : 0;
+    int explorerHeight = termSize.rows - MENU_HEIGHT - STATUS_HEIGHT - replH;
+    int editorHeight = explorerHeight;
+    int editorStartRow = MENU_HEIGHT + 1;
+    int editorStartCol = EXPLORER_WIDTH + 1;
+    int editorWidth = termSize.cols - EXPLORER_WIDTH;
+    int minimapW = minimapVisible ? 18 : 0;
+    int textWidth = editorWidth - 7 - minimapW - 1; // 7 = gutter (5 + 1 + 1)
+
+    // ========== MENU BAR ==========
     output += ansi::move(1, 1);
-    output += ansi::BG_STATUS + ansi::FG_WHITE + ansi::BOLD;
-    output += " FILE  RUN  HELP ";
+    output += theme.bg_menu + theme.fg_editor + ansi::BOLD;
+    output += "  FILE  RUN  HELP  ";
     output += ansi::RESET;
     // Fill rest of menu bar
-    output += ansi::BG_STATUS + ansi::FG_WHITE;
-    for (int i = 18; i < termSize.cols; i++) output += ' ';
+    output += theme.bg_menu;
+    for (int i = 17; i < termSize.cols; i++) output += ' ';
     output += ansi::RESET;
 
-    // File name in menu bar
-    if (!editor.getFilePath().empty()) {
-        std::string fname = editor.getFilePath();
-        size_t lastSlash = fname.rfind('/');
-        if (lastSlash != std::string::npos) fname = fname.substr(lastSlash + 1);
-        if (editor.isModified()) fname += " *";
-        output += ansi::move(1, termSize.cols - (int)fname.size() - 1);
-        output += ansi::BG_STATUS + ansi::FG_BOLD_YELLOW;
-        output += fname;
-        output += ansi::RESET;
+    // Active menu highlight
+    if (activeMenu != MENU_NONE) {
+        int col = 0;
+        std::vector<std::string> menus = {"FILE", "RUN", "HELP"};
+        for (size_t i = 0; i < menus.size(); i++) {
+            col += 2;
+            if ((activeMenu == MENU_FILE && i == 0) ||
+                (activeMenu == MENU_RUN && i == 1) ||
+                (activeMenu == MENU_HELP && i == 2)) {
+                output += ansi::move(1, col);
+                output += theme.accent1 + ansi::BOLD + " " + menus[i] + " " + ansi::RESET + theme.bg_menu;
+            }
+            col += (int)menus[i].size() + 2;
+        }
     }
 
-    // Dropdown menu
+    // Theme indicator on menu bar right
+    std::string themeName = 
+        currentTheme == Theme::Type::DARK ? "Dark" :
+        currentTheme == Theme::Type::DRACULA ? "Dracula" :
+        currentTheme == Theme::Type::NORD ? "Nord" :
+        currentTheme == Theme::Type::ONEDARK ? "OneDark" :
+        currentTheme == Theme::Type::MONOKAI ? "Monokai" :
+        currentTheme == Theme::Type::GRUVBOX_DARK ? "Gruvbox" :
+        currentTheme == Theme::Type::SOLARIZED_DARK ? "Solarized" : "Light";
+    
+    output += ansi::move(1, termSize.cols - 20);
+    output += theme.fg_comment + "Theme: " + themeName + ansi::RESET;
+
+    // Dropdown menus
     if (activeMenu != MENU_NONE) {
         output += ansi::move(2, 1);
-        output += ansi::BG_BLACK + ansi::FG_WHITE;
+        output += theme.bg_panel + theme.fg_editor;
 
         if (activeMenu == MENU_FILE) {
             std::vector<std::string> items = {"New  Ctrl+N", "Open  Ctrl+O", "Save  Ctrl+S", "Save As", "Close"};
@@ -201,9 +208,9 @@ static void render() {
                 output += ansi::move(2 + i, 1);
                 output += ansi::clearLine();
                 if (i == menuSelection) {
-                    output += ansi::BG_BLUE + ansi::FG_WHITE;
+                    output += theme.accent1 + ansi::BOLD;
                 } else {
-                    output += ansi::BG_BLACK + ansi::FG_WHITE;
+                    output += theme.fg_editor;
                 }
                 output += " " + items[i] + " ";
                 output += ansi::RESET;
@@ -212,9 +219,9 @@ static void render() {
             output += ansi::move(2, 1);
             output += ansi::clearLine();
             if (menuSelection == 0) {
-                output += ansi::BG_BLUE + ansi::FG_WHITE;
+                output += theme.accent1 + ansi::BOLD;
             } else {
-                output += ansi::BG_BLACK + ansi::FG_WHITE;
+                output += theme.fg_editor;
             }
             output += " Run File  F9  ";
             output += ansi::RESET;
@@ -222,106 +229,121 @@ static void render() {
             output += ansi::move(2, 1);
             output += ansi::clearLine();
             if (menuSelection == 0) {
-                output += ansi::BG_BLUE + ansi::FG_WHITE;
+                output += theme.accent1 + ansi::BOLD;
             } else {
-                output += ansi::BG_BLACK + ansi::FG_WHITE;
+                output += theme.fg_editor;
             }
             output += " About ";
             output += ansi::RESET;
         }
     }
 
-    term.write(output);
-
-    // File explorer
-    int explorerHeight = getEditorHeight();
-    fileExplorer.render(MENU_HEIGHT + 1, 1, explorerHeight, EXPLORER_WIDTH, fileExplorer.getSelectedIndex());
+    // ========== FILE EXPLORER ==========
+    int explorerStartRow = MENU_HEIGHT + 1;
+    fileExplorer.render(explorerStartRow, 1, explorerHeight, EXPLORER_WIDTH, fileExplorer.getSelectedIndex());
 
     // Separator line
     std::string sep;
     for (int i = 0; i < explorerHeight; i++) {
         sep += ansi::move(MENU_HEIGHT + 1 + i, EXPLORER_WIDTH + 1);
-        sep += ansi::BG_PANEL + ansi::FG_GRAY + "|" + ansi::RESET;
+        sep += theme.bg_panel + theme.fg_comment + "│" + ansi::RESET;
     }
-    term.write(sep);
+    output += sep;
 
-    // Editor
-    int editorHeight = getEditorHeight();
-    editor.render(MENU_HEIGHT + 1, getEditorStartCol(), editorHeight, getEditorWidth());
+    // ========== EDITOR ==========
+    editor.render(MENU_HEIGHT + 1, getEditorStartCol(), editorHeight, editorWidth, minimapVisible);
 
-    // REPL
+    // ========== REPL ==========
     if (replVisible) {
-        int replStart = getReplStartRow();
-        repl.render(replStart, 1, REPL_HEIGHT_DEFAULT, termSize.cols);
+        int replStartRow = editorStartRow + editorHeight;
+        repl.render(replStartRow, 1, replH, termSize.cols);
 
         // Separator above REPL
         std::string replSep;
-        replSep += ansi::move(replStart - 1, 1);
-        replSep += ansi::BG_CYAN + ansi::FG_BOLD_WHITE;
+        replSep += ansi::move(replStartRow - 1, 1);
+        replSep += theme.accent3 + ansi::BOLD;
         for (int i = 0; i < termSize.cols; i++) replSep += '=';
         replSep += ansi::RESET;
-        term.write(replSep);
+        output += replSep;
     }
 
-    // Status bar
+    // ========== STATUS BAR ==========
     int statusRow = termSize.rows;
-    std::string status;
-    status += ansi::move(statusRow, 1);
-    status += ansi::BG_STATUS + ansi::FG_WHITE + ansi::BOLD;
+    output += ansi::move(statusRow, 1);
+    output += theme.bg_status + theme.fg_editor + ansi::BOLD;
 
-    // Left side: position info
+    // Left side: modified indicator, filename, language, position
+    std::string mode = editor.isModified() ? "● " : "  ";
+    std::string filename = editor.getFileName();
+    std::string lang = editor.getLanguage();
     char posBuf[128];
-    snprintf(posBuf, sizeof(posBuf), " Ln %d, Col %d  |  %d lines ",
-             editor.getCursorLine() + 1, editor.getCursorCol() + 1, editor.getLineCount());
-    status += posBuf;
+    snprintf(posBuf, sizeof(posBuf), "Ln %d, Col %d", editor.getCursorLine() + 1, editor.getCursorCol() + 1);
+    std::string total = std::to_string(editor.getTotalLines()) + " lines";
+
+    std::string left = " " + mode + filename + " | " + lang + " | " + posBuf + " | " + total + " ";
+    output += left;
 
     // Status message (center)
     if (!statusMessage.empty()) {
         double elapsed = getTimeSeconds() - statusMessageTime;
         if (elapsed < 3.0) {
-            int remaining = termSize.cols - (int)strlen(posBuf) - 20;
+            int remaining = termSize.cols - (int)left.size() - 20;
             if (remaining > (int)statusMessage.size() + 2) {
                 int pad = remaining / 2;
-                for (int i = 0; i < pad; i++) status += ' ';
-                status += ansi::FG_BOLD_YELLOW + statusMessage + ansi::RESET + ansi::BG_STATUS + ansi::FG_WHITE + ansi::BOLD;
+                for (int i = 0; i < pad; i++) output += ' ';
+                output += theme.accent1 + statusMessage + ansi::RESET + theme.bg_status + theme.fg_editor + ansi::BOLD;
             }
         }
     }
 
-    // Right side
-    std::string right = "Forge Studio v1.0 ";
-    int usedLen = (int)strlen(posBuf) + (int)right.size();
-    int fillLen = termSize.cols - usedLen;
-    if (fillLen > 0 && !statusMessage.empty()) {
-        double elapsed = getTimeSeconds() - statusMessageTime;
-        if (elapsed < 3.0) {
-            // Already centered message takes some space
-            fillLen = 0;
-        }
-    }
-    for (int i = 0; i < fillLen; i++) status += ' ';
-    status += right;
+    // Right side - time and theme
+    time_t now = time(nullptr);
+    struct tm* tm_info = localtime(&now);
+    char timeBuf[16];
+    strftime(timeBuf, sizeof(timeBuf), "%H:%M:%S", tm_info);
+    output += ansi::move(statusRow, termSize.cols - 12);
+    output += theme.fg_comment + std::string(timeBuf) + ansi::RESET;
 
-    status += ansi::RESET;
-    status += ansi::clearToEnd();
-    term.write(status);
-
-    // Position cursor
+    // ========== PROMPT OVERLAY ==========
     if (promptMode != PROMPT_NONE) {
-        // Show prompt at bottom
-        int promptRow = termSize.rows - 1;
-        std::string promptLine;
-        promptLine += ansi::move(promptRow, 1);
-        promptLine += ansi::BG_INPUT + ansi::FG_BOLD_WHITE;
-        promptLine += " " + promptTitle + ": " + promptBuffer;
-        promptLine += ansi::RESET + ansi::clearToEnd();
-        term.write(promptLine);
-        // Move terminal cursor
-        int cursorPos = (int)promptTitle.size() + 4 + promptCursor;
-        term.write(ansi::move(promptRow, cursorPos + 1));
+        int promptRow = termSize.rows / 2;
+        int boxWidth = (int)promptTitle.size() + 40;
+        int boxHeight = 5;
+        int boxRow = promptRow - 2;
+        int boxCol = (termSize.cols - boxWidth) / 2;
+        
+        // Background box
+        for (int i = 0; i < boxHeight; i++) {
+            output += ansi::move(boxRow + i, boxCol);
+            output += theme.bg_panel;
+            output += ansi::clearLine();
+            for (int j = 0; j < boxWidth; j++) output += ' ';
+        }
+        
+        // Title
+        output += ansi::move(boxRow, boxCol + 2);
+        output += theme.accent1 + ansi::BOLD + promptTitle + ansi::RESET;
+        
+        // Input field
+        output += ansi::move(boxRow + 2, boxCol + 2);
+        output += theme.bg_panel + theme.fg_editor + " " + promptBuffer + "_" + std::string(boxWidth - 4 - promptBuffer.size(), ' ') + " " + ansi::RESET;
+        
+        // Hint
+        output += ansi::move(boxRow + 3, boxCol + 2);
+        output += theme.fg_comment + "Enter=confirm  Esc=cancel" + ansi::RESET;
+    }
+
+    term.write(output);
+
+    // ========== CURSOR POSITIONING ==========
+    if (promptMode != PROMPT_NONE) {
+        int promptRow = termSize.rows / 2;
+        int boxWidth = (int)promptTitle.size() + 40;
+        int boxCol = (termSize.cols - boxWidth) / 2;
+        int cursorPos = boxCol + 4 + promptCursor;
+        term.write(ansi::move(promptRow + 2, cursorPos));
         term.write(ansi::showCursor());
     } else if (replVisible && repl.isActive()) {
-        // REPL is active, show cursor there
         int replStart = getReplStartRow();
         int replInputRow = replStart + REPL_HEIGHT_DEFAULT - 1;
         int promptLen = 7; // "forge> "
@@ -330,12 +352,24 @@ static void render() {
     } else {
         // Editor cursor
         int cursorRow = MENU_HEIGHT + 1 + editor.getCursorLine() - editor.getScrollOffset();
-        int cursorCol = getEditorStartCol() + 5 + editor.getCursorCol();
+        int cursorCol = getEditorStartCol() + 7 + editor.getCursorCol() - editor.getScrollOffset();
+        if (cursorCol < getEditorStartCol() + 7) cursorCol = getEditorStartCol() + 7;
         term.write(ansi::move(cursorRow, cursorCol));
         term.write(ansi::showCursor());
     }
 
     term.flush();
+}
+
+static void setStatusMessage(const std::string& msg) {
+    statusMessage = msg;
+    statusMessageTime = getTimeSeconds();
+}
+
+static double getTimeSeconds() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
 static void handleInput(int key) {
@@ -384,17 +418,56 @@ static void handleInput(int key) {
             case 'y' - 'a' + 1: // Ctrl+Y
                 editor.redo();
                 return;
-            case 'a' - 'a' + 1: // Ctrl+A - go to start of line
+            case 'a' - 'a' + 1: // Ctrl+A
                 editor.moveHome();
                 return;
-            case 'e' - 'a' + 1: // Ctrl+E - go to end of line
+            case 'e' - 'a' + 1: // Ctrl+E
                 editor.moveEnd();
                 return;
-            case 'f' - 'a' + 1: // Ctrl+F - search
+            case 'f' - 'a' + 1: // Ctrl+F
                 promptMode = PROMPT_SEARCH;
                 promptBuffer.clear();
                 promptCursor = 0;
                 promptTitle = "Search";
+                return;
+            case 'g' - 'a' + 1: // Ctrl+G - goto line
+                promptMode = PROMPT_GOTO;
+                promptBuffer.clear();
+                promptCursor = 0;
+                promptTitle = "Go to Line";
+                return;
+            case 't' - 'a' + 1: // Ctrl+T - toggle theme
+                {
+                    static std::vector<Theme::Type> themes = {
+                        Theme::Type::DARK, Theme::Type::DRACULA, Theme::Type::NORD,
+                        Theme::Type::ONEDARK, Theme::Type::MONOKAI, Theme::Type::GRUVBOX_DARK,
+                        Theme::Type::SOLARIZED_DARK
+                    };
+                    auto it = std::find(themes.begin(), themes.end(), currentTheme);
+                    if (it != themes.end() && ++it != themes.end()) {
+                        currentTheme = *it;
+                    } else {
+                        currentTheme = themes[0];
+                    }
+                    Theme::set(currentTheme);
+                    editor.setTheme(currentTheme);
+                    setStatusMessage("Theme: " + std::string(
+                        currentTheme == Theme::Type::DARK ? "Dark" :
+                        currentTheme == Theme::Type::DRACULA ? "Dracula" :
+                        currentTheme == Theme::Type::NORD ? "Nord" :
+                        currentTheme == Theme::Type::ONEDARK ? "OneDark" :
+                        currentTheme == Theme::Type::MONOKAI ? "Monokai" :
+                        currentTheme == Theme::Type::GRUVBOX_DARK ? "Gruvbox" : "Solarized"));
+                }
+                return;
+            case 'm' - 'a' + 1: // Ctrl+M - toggle minimap
+                minimapVisible = !minimapVisible;
+                setStatusMessage(minimapVisible ? "Minimap: ON" : "Minimap: OFF");
+                return;
+            case 'r' - 'a' + 1: // Ctrl+R - toggle REPL
+                replVisible = !replVisible;
+                if (replVisible) repl.activate();
+                setStatusMessage(replVisible ? "REPL opened (F5 to toggle)" : "REPL closed");
                 return;
         }
     }
@@ -408,6 +481,27 @@ static void handleInput(int key) {
     }
     if (key == KEY_F9) {
         runCurrentFile();
+        return;
+    }
+    if (key == KEY_F10) {
+        // Quick theme cycle
+        static std::vector<Theme::Type> themes = {
+            Theme::Type::DARK, Theme::Type::DRACULA, Theme::Type::NORD,
+            Theme::Type::ONEDARK, Theme::Type::MONOKAI, Theme::Type::GRUVBOX_DARK,
+            Theme::Type::SOLARIZED_DARK
+        };
+        auto it = std::find(themes.begin(), themes.end(), currentTheme);
+        if (it != themes.end() && ++it != themes.end()) {
+            currentTheme = *it;
+        } else {
+            currentTheme = themes[0];
+        }
+        Theme::set(currentTheme);
+        editor.setTheme(currentTheme);
+        return;
+    }
+    if (key == KEY_F11) {
+        minimapVisible = !minimapVisible;
         return;
     }
 
@@ -455,134 +549,93 @@ static void handleMenuInput(int key) {
         menuSelection = 0;
         return;
     }
-
     if (key == KEY_UP) {
-        if (menuSelection > 0) menuSelection--;
+        menuSelection = (menuSelection - 1 + 5) % 5;
         return;
     }
     if (key == KEY_DOWN) {
-        menuSelection++;
-        if (activeMenu == MENU_FILE && menuSelection > 4) menuSelection = 4;
-        if (activeMenu == MENU_RUN && menuSelection > 0) menuSelection = 0;
-        if (activeMenu == MENU_HELP && menuSelection > 0) menuSelection = 0;
+        menuSelection = (menuSelection + 1) % 5;
         return;
     }
-
     if (key == KEY_ENTER) {
         if (activeMenu == MENU_FILE) {
             switch (menuSelection) {
-                case FILE_NEW:    newFile(); break;
-                case FILE_OPEN:
+                case 0: newFile(); break;
+                case 1: 
                     promptMode = PROMPT_OPEN;
                     promptBuffer.clear();
                     promptCursor = 0;
                     promptTitle = "Open File";
                     break;
-                case FILE_SAVE:   saveCurrentFile(); break;
-                case FILE_SAVEAS:
+                case 2: saveCurrentFile(); break;
+                case 3:
                     promptMode = PROMPT_SAVEAS;
                     promptBuffer = editor.getFilePath();
-                    promptCursor = (int)promptBuffer.size();
+                    promptCursor = promptBuffer.size();
                     promptTitle = "Save As";
                     break;
-                case FILE_CLOSE:  newFile(); break;
+                case 4: newFile(); break;
             }
-        } else if (activeMenu == MENU_RUN) {
+        } else if (activeMenu == MENU_RUN && menuSelection == 0) {
             runCurrentFile();
         } else if (activeMenu == MENU_HELP) {
             showAbout();
         }
         activeMenu = MENU_NONE;
         menuSelection = 0;
-        return;
     }
-
-    // Quick keys for file menu
-    if (key == 'f' || key == 'F') { activeMenu = MENU_FILE; menuSelection = 0; return; }
-    if (key == 'r' || key == 'R') { activeMenu = MENU_RUN; menuSelection = 0; return; }
-    if (key == 'h' || key == 'H') { activeMenu = MENU_HELP; menuSelection = 0; return; }
 }
 
 static void handlePromptInput(int key) {
-    switch (key) {
-        case KEY_ENTER: {
-            std::string result = promptBuffer;
-            PromptMode mode = promptMode;
-            promptMode = PROMPT_NONE;
-
-            if (mode == PROMPT_OPEN) {
-                if (!result.empty()) openFile(result);
-            } else if (mode == PROMPT_SAVEAS) {
-                if (!result.empty()) {
-                    editor.saveFile(result);
-                    setStatusMessage("Saved: " + result);
-                }
-            } else if (mode == PROMPT_SEARCH) {
-                if (!result.empty()) {
-                    int found = editor.findNext(result);
-                    if (found >= 0) {
-                        setStatusMessage("Found: " + result);
-                    } else {
-                        setStatusMessage("Not found: " + result);
-                    }
-                }
-            } else if (mode == PROMPT_GOTO) {
-                int line = std::atoi(result.c_str());
-                if (line > 0) {
-                    editor.moveToLine(line);
-                    setStatusMessage("Line " + result);
-                }
-            }
-            break;
+    if (key == KEY_ESCAPE) {
+        promptMode = PROMPT_NONE;
+        promptBuffer.clear();
+        return;
+    }
+    if (key == KEY_ENTER) {
+        std::string result = promptBuffer;
+        if (promptMode == PROMPT_OPEN) {
+            openFile(result);
+        } else if (promptMode == PROMPT_SAVEAS) {
+            editor.saveFile(result);
+            editor.setFilePath(result);
+            editor.setModified(false);
+            setStatusMessage("Saved to " + result);
+        } else if (promptMode == PROMPT_GOTO) {
+            int line = std::stoi(result);
+            editor.moveToLine(line);
+        } else if (promptMode == PROMPT_SEARCH) {
+            editor.findNext(result);
         }
-        case KEY_BACKSPACE: {
-            if (promptCursor > 0) {
-                promptBuffer.erase(promptCursor - 1, 1);
-                promptCursor--;
-            }
-            break;
+        promptMode = PROMPT_NONE;
+        promptBuffer.clear();
+        return;
+    }
+    if (key == KEY_BACKSPACE) {
+        if (promptCursor > 0) {
+            promptBuffer.erase(promptCursor - 1, 1);
+            promptCursor--;
         }
-        case KEY_DELETE: {
-            if (promptCursor < (int)promptBuffer.size()) {
-                promptBuffer.erase(promptCursor, 1);
-            }
-            break;
-        }
-        case KEY_LEFT: {
-            if (promptCursor > 0) promptCursor--;
-            break;
-        }
-        case KEY_RIGHT: {
-            if (promptCursor < (int)promptBuffer.size()) promptCursor++;
-            break;
-        }
-        case KEY_HOME: promptCursor = 0; break;
-        case KEY_END:  promptCursor = (int)promptBuffer.size(); break;
-        case KEY_ESCAPE: promptMode = PROMPT_NONE; break;
-        default: {
-            if (key >= 32 && key < 127) {
-                promptBuffer.insert(promptCursor, 1, (char)key);
-                promptCursor++;
-            }
-            break;
-        }
+        return;
+    }
+    if (key == KEY_LEFT) {
+        if (promptCursor > 0) promptCursor--;
+        return;
+    }
+    if (key == KEY_RIGHT) {
+        if (promptCursor < (int)promptBuffer.size()) promptCursor++;
+        return;
+    }
+    if (key >= 32 && key <= 126) {
+        promptBuffer.insert(promptCursor, 1, (char)key);
+        promptCursor++;
+        return;
     }
 }
 
 static void openFile(const std::string& path) {
-    std::string resolvedPath = path;
-
-    // If not absolute, resolve relative to CWD
-    if (resolvedPath.empty() || resolvedPath[0] != '/') {
-        char cwd[PATH_MAX];
-        if (getcwd(cwd, sizeof(cwd))) {
-            resolvedPath = std::string(cwd) + "/" + path;
-        }
-    }
-
-    editor.loadFile(resolvedPath);
+    editor.loadFile(path);
     setStatusMessage("Opened: " + path);
-    fileExplorer.refresh();
 }
 
 static void saveCurrentFile() {
@@ -591,10 +644,10 @@ static void saveCurrentFile() {
         promptBuffer.clear();
         promptCursor = 0;
         promptTitle = "Save As";
-    } else {
-        editor.saveFile(editor.getFilePath());
-        setStatusMessage("Saved: " + editor.getFilePath());
+        return;
     }
+    editor.saveFile(editor.getFilePath());
+    setStatusMessage("Saved: " + editor.getFilePath());
 }
 
 static void newFile() {
@@ -603,25 +656,50 @@ static void newFile() {
 }
 
 static void showAbout() {
-    setStatusMessage("Forge Studio v1.0 - A terminal IDE for Forge");
+    promptMode = PROMPT_NONE;
+    promptTitle = "About";
+    promptBuffer = "Forge Studio v1.0\nForge Programming Language IDE\nBuilt with C++20";
+    promptCursor = 0;
 }
 
 static void runCurrentFile() {
     if (editor.getFilePath().empty()) {
-        setStatusMessage("No file to run. Save first.");
-        return;
+        saveCurrentFile();
+        if (editor.getFilePath().empty()) return;
     }
+    if (editor.isModified()) {
+        editor.saveFile(editor.getFilePath());
+    }
+    std::string cmd = "./forge " + editor.getFilePath();
+    if (replVisible) {
+        repl.runCommand(cmd);
+    } else {
+        // Show output in a temporary REPL
+        replVisible = true;
+        repl.activate();
+        repl.runCommand(cmd);
+        setStatusMessage("Running: " + editor.getFilePath());
+    }
+}
 
-    // Save first
-    editor.saveFile(editor.getFilePath());
-
-    std::string forgePath = findForgeBinary();
-    std::string cmd = forgePath + " " + editor.getFilePath();
-
-    // Open REPL to show output
-    replVisible = true;
-    repl.activate();
-    repl.clear();
-    repl.runCommand("Running: " + editor.getFilePath());
-    repl.runCommand(cmd);
+static std::string findForgeBinary() {
+    char exePath[PATH_MAX];
+    ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
+    if (len != -1) {
+        exePath[len] = '\0';
+        std::string dir = exePath;
+        size_t lastSlash = dir.rfind('/');
+        if (lastSlash != std::string::npos) {
+            dir = dir.substr(0, lastSlash);
+            std::string forgePath = dir + "/forge";
+            if (access(forgePath.c_str(), X_OK) == 0) {
+                return forgePath;
+            }
+            forgePath = dir + "/../forge";
+            if (access(forgePath.c_str(), X_OK) == 0) {
+                return forgePath;
+            }
+        }
+    }
+    return "forge";
 }

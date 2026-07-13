@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/forge-format.dir/link.d "CMakeFiles/forge-format.dir/format.cpp.o" "CMakeFiles/forge-format.dir/__/src/lexer.cpp.o" -o forge-format

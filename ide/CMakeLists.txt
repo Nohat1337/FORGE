@@ -11,6 +11,7 @@ add_executable(forge-studio
     src/editor.cpp
     src/file_explorer.cpp
     src/repl.cpp
+    src/theme.cpp
 )
 
 target_include_directories(forge-studio PRIVATE src)

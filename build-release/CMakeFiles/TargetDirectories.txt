@@ -1,0 +1,8 @@
+/home/nohat1337/c++-fork/build-release/CMakeFiles/forge.dir
+/home/nohat1337/c++-fork/build-release/CMakeFiles/edit_cache.dir
+/home/nohat1337/c++-fork/build-release/CMakeFiles/rebuild_cache.dir
+/home/nohat1337/c++-fork/build-release/tools/CMakeFiles/forge-format.dir
+/home/nohat1337/c++-fork/build-release/tools/CMakeFiles/forge-lint.dir
+/home/nohat1337/c++-fork/build-release/tools/CMakeFiles/forge-debug.dir
+/home/nohat1337/c++-fork/build-release/tools/CMakeFiles/edit_cache.dir
+/home/nohat1337/c++-fork/build-release/tools/CMakeFiles/rebuild_cache.dir

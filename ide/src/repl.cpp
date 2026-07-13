@@ -58,7 +58,7 @@ int Repl::render(int startRow, int startCol, int height, int width) {
             output += displayLines[lineIdx];
         }
 
-        output += ansi::CLEAR_TO_END;
+        output += ansi::clearToEnd();
     }
 
     term.write(output);

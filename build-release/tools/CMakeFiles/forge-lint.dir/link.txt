@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/forge-lint.dir/link.d "CMakeFiles/forge-lint.dir/linter.cpp.o" "CMakeFiles/forge-lint.dir/__/src/lexer.cpp.o" -o forge-lint
