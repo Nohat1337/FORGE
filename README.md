@@ -42,10 +42,7 @@
 ### Linux (Universal)
 
 ```bash
-# One-line install (detects your distro)
-curl -fsSL https://forge-lang.org/install.sh | bash
-
-# Or download and run
+# download and run
 wget https://github.com/forge-lang/forge/releases/latest/download/install_linux.sh
 chmod +x install_linux.sh
 ./install_linux.sh
@@ -74,7 +71,7 @@ brew install forge
 ### From Source
 
 ```bash
-git clone https://github.com/forge-lang/forge
+git clone https://github.com/Nohat1337/FORGE.git
 cd forge
 mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
