@@ -284,6 +284,8 @@ public:
     bool interpret(std::shared_ptr<GCFunction> function);
     bool interpretSource(const std::string& source, const std::string& filename = "<script>");
 
+    void setArgs(int argc, char** argv) { savedArgc_ = argc; savedArgv_ = argv; }
+
     void defineNative(const std::string& name, GCNative::NativeFn fn, int arity = -1);
     void defineModule(const std::string& name, GCMap* module);
 
@@ -320,6 +322,8 @@ private:
     std::vector<std::unique_ptr<FVMThread>> threads_;
     std::mutex threadsMutex_;
     size_t nextThreadId_ = 1;
+    int savedArgc_ = 0;
+    char** savedArgv_ = nullptr;
 };
 
 } // namespace forge::fvm

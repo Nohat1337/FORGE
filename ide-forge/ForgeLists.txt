@@ -1,0 +1,5 @@
+project(ForgeStudio)
+version(1.0.0)
+file(src/main.fge)
+output(forge-studio)
+arch(x64)

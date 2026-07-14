@@ -30,10 +30,11 @@ add_executable(forgevm
     src/optimizer.cpp
     src/fvm/runtime.cpp
     src/pkg_manager.cpp
+    src/forge_build.cpp
 )
 
 target_include_directories(forgevm PRIVATE src)
-target_compile_definitions(forgevm PRIVATE FVM_BUILD)
+target_compile_definitions(forgevm PRIVATE FVM_BUILD FORGE_ROOT_DIR="${CMAKE_SOURCE_DIR}")
 
 if(UNIX AND NOT APPLE)
     target_link_libraries(forge PRIVATE dl)

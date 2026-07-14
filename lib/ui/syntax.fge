@@ -1,363 +1,149 @@
-// Forge UI Library - Syntax Highlighting
-// Written in Forge, runs on FVM
-
-import "ui/theme"
-
-// ============================================================
-// Token Types
-// ============================================================
-
-enum TokenType {
-    Plain,
-    Keyword,
-    KeywordControl,   // if, else, while, for, return, break, continue
-    KeywordDecl,      // let, const, fn, class, extends
-    KeywordOther,     // true, false, nil, this, super
-    String,
-    StringInterp,     // ${...} inside string
-    Number,
-    NumberHex,
-    NumberBin,
-    Comment,
-    CommentDoc,       /// doc comment
-    Operator,
-    OperatorCompound, // +=, -=, *=, etc.
-    Arrow,             // =>
-    FunctionName,
-    FunctionCall,
-    Builtin,
-    BuiltinConst,     // builtin constants
-    Paren,
-    Brace,
-    Bracket,
-    Semicolon,
-    Colon,
-    Comma,
-    Dot,
-    Arrow,             // =>
-    Type,
-    Variable,
-    Preproc,           // import
-    Error,             // unclosed string, etc.
-}
-
-struct HighlightSpan {
-    start: int
-    length: int
-    type: TokenType
-}
+// Forge UI Syntax Highlighting
+// Tokenizes Forge source code and maps tokens to theme colors
 
 class SyntaxHighlighter {
-    keywordsControl: set<string>
-    keywordsDecl: set<string>
-    keywordsOther: set<string>
-    builtins: set<string>
-    builtinConsts: set<string>
-    types: set<string>
-    
-    fn new() -> SyntaxHighlighter {
-        SyntaxHighlighter {
-            keywordsControl: {"if", "else", "while", "for", "in", "return", "break", "continue",
-                "match", "case", "try", "catch", "finally", "throw",
-                "and", "or", "not", "loop",
-            },
-            keywordsDecl: {"let", "const", "fn", "class", "extends", "super", "this",
-                "pub", "static", "final", "new", "as", "is", "extern", "gen", "yield", "await", "async",
-                "struct", "enum", "impl", "trait", "mod", "use", "type", "where", "ref", "mut", "move", "box"
-            },
-            keywordsOther: {"true", "false", "nil", "import"},
-            builtins: {"print", "println", "len", "str", "int", "float",
-                "input", "type", "typeof", "range", "assert",
-                "panic", "error", "exit",
-                "push", "pop", "insert", "remove", "contains",
-                "keys", "values", "append", "substr", "contains",
-                "abs", "min", "max", "sqrt", "pow", "random",
-                "clock", "now", "sleep",
-                "execute", "env", "cwd", "args", "time",
-                "parseInt", "toFloat", "charAt", "substring",
-                "keys", "values", "entries", "has", "clone",
-                "upper", "lower", "trim", "split", "replace",
-                "contains", "startsWith", "endsWith",
-            },
-            builtinConsts: {"PI", "E", "TAU"},
-            types: {"int", "float", "string", "bool", "list", "map",
-                "set", "nil", "any", "void", "fn",
-            },
-        }
+    fn init(theme) {
+        this.theme = theme;
+        this.keywords = ["let", "const", "fn", "return", "if", "else", "while",
+                         "for", "in", "true", "false", "nil", "and", "or", "not",
+                         "class", "this", "super", "extends", "struct", "impl",
+                         "enum", "match", "case", "try", "catch", "throw",
+                         "import", "from", "as", "gen", "yield"];
+        this.builtins = ["print", "len", "push", "pop", "str", "int", "float",
+                         "type", "error", "keys", "values", "has", "entries",
+                         "clone", "upper", "lower", "trim", "split", "contains",
+                         "replace", "substring", "charAt", "parseInt", "abs",
+                         "min", "max", "sqrt", "pow", "floor", "ceil", "round",
+                         "random", "randomInt"];
+        this.types = ["Point", "Vec2", "Theme", "Editor", "FileExplorer",
+                      "SyntaxHighlighter", "Repl"];
     }
-    
-    fn isKeywordControl(word: string) -> bool { this.keywordsControl.contains(word) }
-    fn isKeywordDecl(word: string) -> bool { this.keywordsDecl.contains(word) }
-    fn isKeywordOther(word: string) -> bool { this.keywordsOther.contains(word) }
-    fn isBuiltin(word: string) -> bool { this.builtins.contains(word) }
-    fn isBuiltinConst(word: string) -> bool { this.builtinConsts.contains(word) }
-    fn isType(word: string) -> bool { this.types.contains(word) }
-    
-    fn highlightLine(line: string, lineNumber: int) -> list<HighlightSpan> {
-        var spans: list<HighlightSpan> = []
-        var i = 0
-        let len = line.len()
-        
-        while i < len {
-            let c = line[i]
-            
-            // Line comment
-            if c == '/' && i + 1 < len && line[i + 1] == '/' {
-                spans.push(HighlightSpan { start: i, length: len - i, type: TokenType::Comment })
-                break
+
+    fn highlight_line(line) {
+        let result = "";
+        let i = 0;
+        let len = len(line);
+        let theme = this.theme;
+        let fg = theme.fg;
+        let bg = theme.bg;
+
+        while (i < len) {
+            let ch = charAt(line, i);
+
+            // Single-line comment
+            if (ch == "/" && i + 1 < len && charAt(line, i + 1) == "/") {
+                result = result + "\x1b[38;5;" + str(theme.comment) + "m" + substring(line, i) + "\x1b[0m";
+                i = len;
             }
-            
-            // Block comment start
-            if c == '/' && i + 1 < len && line[i + 1] == '*' {
-                let start = i
-                i += 2
-                while i < len - 1 {
-                    if line[i] == '*' && line[i + 1] == '/' {
-                        i += 2
-                        break
-                    }
-                    i++
+            // Multi-line comment start
+            else if (ch == "/" && i + 1 < len && charAt(line, i + 1) == "*") {
+                let end = find_close_comment(line, i + 2);
+                result = result + "\x1b[38;5;" + str(theme.comment) + "m" + substring(line, i, end + 2) + "\x1b[0m";
+                i = end + 2;
+            }
+            // String
+            else if (ch == "\"") {
+                let j = i + 1;
+                while (j < len && charAt(line, j) != "\"") {
+                    if (charAt(line, j) == "\\") j = j + 1;
+                    j = j + 1;
                 }
-                spans.push(HighlightSpan { start: start, length: i - start, type: TokenType::Comment })
-                continue
+                j = j + 1;
+                result = result + "\x1b[38;5;" + str(theme.string) + "m" + substring(line, i, j) + "\x1b[0m";
+                i = j;
             }
-            
-            // String (double quote) with interpolation support
-            if c == '"' {
-                let start = i
-                i++
-                var inInterp = false
-                var interpDepth = 0
-                while i < len {
-                    if line[i] == '\\' && i + 1 < len {
-                        i += 2
-                    } else if line[i] == '"' && interpDepth == 0 {
-                        i++
-                        break
-                    } else if line[i] == '$' && i + 1 < len && line[i + 1] == '{' && interpDepth == 0 {
-                        inInterp = true
-                        interpDepth = 1
-                        i += 2
-                    } else if line[i] == '{' && inInterp {
-                        interpDepth++
-                        i++
-                    } else if line[i] == '}' && inInterp {
-                        interpDepth--
-                        if interpDepth == 0 { inInterp = false }
-                        i++
-                    } else {
-                        i++
-                    }
+            // Number
+            else if (ch >= "0" && ch <= "9") {
+                let j = i;
+                while (j < len && ((charAt(line, j) >= "0" && charAt(line, j) <= "9") || charAt(line, j) == "." || charAt(line, j) == "x" || charAt(line, j) == "b")) {
+                    j = j + 1;
                 }
-                spans.push(HighlightSpan { start: start, length: i - start, type: TokenType::String })
-                continue
+                result = result + "\x1b[38;5;" + str(theme.number) + "m" + substring(line, i, j) + "\x1b[0m";
+                i = j;
             }
-            
-            // String (single quote)
-            if c == '\'' {
-                let start = i
-                i++
-                while i < len && line[i] != '\'' {
-                    if line[i] == '\\' && i + 1 < len { i++ }
-                    i++
+            // Word (keyword, builtin, type, identifier)
+            else if ((ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || ch == "_") {
+                let j = i;
+                while (j < len && ((charAt(line, j) >= "a" && charAt(line, j) <= "z") ||
+                       (charAt(line, j) >= "A" && charAt(line, j) <= "Z") ||
+                       (charAt(line, j) >= "0" && charAt(line, j) <= "9") || charAt(line, j) == "_")) {
+                    j = j + 1;
                 }
-                if i < len { i++ }
-                spans.push(HighlightSpan { start: start, length: i - start, type: TokenType::String })
-                continue
-            }
-            
-            // Hex number
-            if c == '0' && i + 1 < len && (line[i + 1] == 'x' || line[i + 1] == 'X') {
-                let start = i
-                i += 2
-                while i < len && line[i].is_hex_digit() { i++ }
-                spans.push(HighlightSpan { start: start, length: i - start, type: TokenType::NumberHex })
-                continue
-            }
-            
-            // Binary number
-            if c == '0' && i + 1 < len && (line[i + 1] == 'b' || line[i + 1] == 'B') {
-                let start = i
-                i += 2
-                while i < len && (line[i] == '0' || line[i] == '1') { i++ }
-                spans.push(HighlightSpan { start: start, length: i - start, type: TokenType::NumberBin })
-                continue
-            }
-            
-            // Number (including float)
-            if c.is_digit() || (c == '.' && i + 1 < len && line[i + 1].is_digit()) {
-                let start = i
-                var hasDot = false
-                while i < len && (line[i].is_digit() || line[i] == '.') {
-                    if line[i] == '.' {
-                        if hasDot { break }
-                        hasDot = true
-                    }
-                    i++
+                let word = substring(line, i, j);
+                let color = theme.fg;
+
+                if (in_list(word, this.keywords)) {
+                    color = theme.keyword;
+                } else if (in_list(word, this.builtins)) {
+                    color = theme.function;
+                } else if (in_list(word, this.types)) {
+                    color = theme.type;
+                } else if (word == "true" || word == "false" || word == "nil") {
+                    color = theme.constant;
+                } else if (word == "this") {
+                    color = theme.type;
                 }
-                spans.push(HighlightSpan { start: start, length: i - start, type: TokenType::Number })
-                continue
+
+                result = result + "\x1b[38;5;" + str(color) + "m" + word + "\x1b[0m";
+                i = j;
             }
-            
-            // Interpolation start ${...}
-            if c == '$' && i + 1 < len && line[i + 1] == '{' {
-                spans.push(HighlightSpan { start: i, length: 2, type: TokenType::StringInterp })
-                i += 2
-                continue
-            }
-            
-            // Interpolation end }
-            if c == '}' {
-                spans.push(HighlightSpan { start: i, length: 1, type: TokenType::StringInterp })
-                i++
-                continue
-            }
-            
-            // Identifier / keyword
-            if c.is_alpha() || c == '_' {
-                let start = i
-                while i < len && (line[i].is_alnum() || line[i] == '_') { i++ }
-                let word = line.substr(start, i - start)
-                
-                let token_type = if this.isKeywordControl(word) {
-                    TokenType::KeywordControl
-                } else if this.isKeywordDecl(word) {
-                    TokenType::KeywordDecl
-                } else if this.isKeywordOther(word) {
-                    TokenType::KeywordOther
-                } else if this.isBuiltinConst(word) {
-                    TokenType::BuiltinConst
-                } else if this.isBuiltin(word) {
-                    TokenType::Builtin
-                } else if this.isType(word) {
-                    TokenType::Type
-                } else {
-                    // Check if followed by '(' -> function name
-                    let j = i
-                    while j < len && line[j] == ' ' { j++ }
-                    if j < len && line[j] == '(' {
-                        TokenType::FunctionName
-                    } else {
-                        TokenType::Variable
-                    }
-                }
-                spans.push(HighlightSpan { start: start, length: i - start, type: token_type })
-                continue
-            }
-            
-            // Compound operators (+=, -=, *=, /=, %=, ==, !=, <=, >=, =>, ++, --, &&, ||)
-            if (c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '=' ||
-                c == '!' || c == '<' || c == '>' || c == '&' || c == '|') && i + 1 < len {
-                let next = line[i + 1]
-                if (c == '+' && (next == '=' || next == '+')) ||
-                   (c == '-' && (next == '=' || next == '-')) ||
-                   (c == '*' && next == '=') ||
-                   (c == '/' && next == '=') ||
-                   (c == '%' && next == '=') ||
-                   (c == '=' && (next == '=' || next == '>')) ||
-                   (c == '!' && next == '=') ||
-                   (c == '<' && (next == '=' || next == '<')) ||
-                   (c == '>' && (next == '=' || next == '>')) ||
-                   (c == '&' && next == '&') ||
-                   (c == '|' && next == '|') {
-                    spans.push(HighlightSpan { start: i, length: 2, type: TokenType::OperatorCompound })
-                    i += 2
-                    continue
-                }
-            }
-            
-            // Arrow =>
-            if c == '=' && i + 1 < len && line[i + 1] == '>' {
-                spans.push(HighlightSpan { start: i, length: 2, type: TokenType::Arrow })
-                i += 2
-                continue
-            }
-            
             // Operators
-            if c == '+' || c == '-' || c == '*' || c == '/' || c == '%' ||
-               c == '=' || c == '!' || c == '<' || c == '>' ||
-               c == '&' || c == '|' || c == '^' || c == '~' || c == '?' {
-                let start = i
-                i++
-                if i < len && line[i] == '=' { i++ }
-                spans.push(HighlightSpan { start: start, length: i - start, type: TokenType::Operator })
-                continue
-            }
-            
-            // Punctuation
-            if c == '(' || c == ')' {
-                spans.push(HighlightSpan { start: i, length: 1, type: TokenType::Paren })
-                i++; continue
-            }
-            if c == '{' || c == '}' {
-                spans.push(HighlightSpan { start: i, length: 1, type: TokenType::Brace })
-                i++; continue
-            }
-            if c == '[' || c == ']' {
-                spans.push(HighlightSpan { start: i, length: 1, type: TokenType::Bracket })
-                i++; continue
-            }
-            if c == ';' {
-                spans.push(HighlightSpan { start: i, length: 1, type: TokenType::Semicolon })
-                i++; continue
-            }
-            if c == ':' {
-                spans.push(HighlightSpan { start: i, length: 1, type: TokenType::Colon })
-                i++; continue
-            }
-            if c == ',' {
-                spans.push(HighlightSpan { start: i, length: 1, type: TokenType::Comma })
-                i++; continue
-            }
-            if c == '.' {
-                // Check for .. range operator
-                if i + 1 < len && line[i + 1] == '.' {
-                    spans.push(HighlightSpan { start: i, length: 2, type: TokenType::Operator })
-                    i += 2
-                } else {
-                    spans.push(HighlightSpan { start: i, length: 1, type: TokenType::Dot })
-                    i++
+            else if (ch == "+" || ch == "-" || ch == "*" || ch == "/" || ch == "%" ||
+                     ch == "=" || ch == "!" || ch == "<" || ch == ">" ||
+                     ch == "&" || ch == "|" || ch == "^" || ch == "~") {
+                let j = i + 1;
+                if (j < len && (charAt(line, j) == "=" || charAt(line, j) == ">" || charAt(line, j) == "<")) {
+                    j = j + 1;
                 }
-                continue
+                result = result + "\x1b[38;5;" + str(theme.operator) + "m" + substring(line, i, j) + "\x1b[0m";
+                i = j;
             }
-            
-            // Plain character
-            i++
+            // Punctuation
+            else if (ch == "{" || ch == "}" || ch == "(" || ch == ")" ||
+                     ch == "[" || ch == "]" || ch == ";" || ch == "," ||
+                     ch == "." || ch == ":" || ch == "?") {
+                result = result + "\x1b[38;5;" + str(theme.fg) + "m" + ch + "\x1b[0m";
+                i = i + 1;
+            }
+            // Other characters
+            else {
+                result = result + ch;
+                i = i + 1;
+            }
         }
-        
-        return spans
+
+        return result;
     }
-    
-    fn colorForToken(type: TokenType, theme: Theme) -> int {
-        match type {
-            TokenType::KeywordControl => theme.keyword_control
-            TokenType::KeywordDecl => theme.keyword_decl
-            TokenType::KeywordOther => theme.keyword_other
-            TokenType::String => theme.string
-            TokenType::StringInterp => theme.string_interp
-            TokenType::Number => theme.number
-            TokenType::NumberHex => theme.number
-            TokenType::NumberBin => theme.number
-            TokenType::Comment => theme.comment
-            TokenType::CommentDoc => theme.comment
-            TokenType::Operator => theme.operator
-            TokenType::OperatorCompound => theme.operator
-            TokenType::Arrow => theme.operator
-            TokenType::FunctionName => theme.function
-            TokenType::Builtin => theme.builtin
-            TokenType::BuiltinConst => theme.builtin_const
-            TokenType::Type => theme.type
-            TokenType::Variable => theme.variable
-            TokenType::Paren => theme.punctuation
-            TokenType::Brace => theme.punctuation
-            TokenType::Bracket => theme.punctuation
-            TokenType::Semicolon => theme.punctuation
-            TokenType::Colon => theme.punctuation
-            TokenType::Comma => theme.punctuation
-            TokenType::Dot => theme.punctuation
-            TokenType::Preproc => theme.preproc
-            TokenType::Error => theme.error
-            _ => theme.fg
+
+    fn color_for_token(token_type) {
+        let t = this.theme;
+        if (token_type == "keyword") return t.keyword;
+        if (token_type == "string") return t.string;
+        if (token_type == "number") return t.number;
+        if (token_type == "comment") return t.comment;
+        if (token_type == "type") return t.type;
+        if (token_type == "function") return t.function;
+        if (token_type == "operator") return t.operator;
+        if (token_type == "constant") return t.constant;
+        return t.fg;
+    }
+}
+
+fn find_close_comment(line, start) {
+    let i = start;
+    let len = len(line);
+    while (i < len - 1) {
+        if (charAt(line, i) == "*" && charAt(line, i + 1) == "/") {
+            return i;
         }
+        i = i + 1;
     }
+    return len - 1;
+}
+
+fn in_list(word, list) {
+    for (let item in list) {
+        if (item == word) return true;
+    }
+    return false;
 }

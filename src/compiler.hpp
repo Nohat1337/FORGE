@@ -74,6 +74,9 @@ private:
     void compileFnDecl(FnDecl& decl);
     void compileGenDecl(GenDecl& decl);
     void compileClassDecl(ClassDecl& decl);
+    void compileStructDecl(StructDecl& decl);
+    void compileImplDecl(ImplDecl& decl);
+    void compileEnumDecl(EnumDecl& decl);
     void compileReturn(ReturnStmt& stmt);
     void compileIf(IfStmt& stmt);
     void compileWhile(WhileStmt& stmt);

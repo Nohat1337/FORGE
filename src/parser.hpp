@@ -37,6 +37,9 @@ private:
     StmtPtr parseBlock();
     StmtPtr parseExprStmt();
     StmtPtr parseClassDecl();
+    StmtPtr parseStructDecl();
+    StmtPtr parseImplDecl();
+    StmtPtr parseEnumDecl();
     StmtPtr parseTryCatch();
     StmtPtr parseExternFn();
 

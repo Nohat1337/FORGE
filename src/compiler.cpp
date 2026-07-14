@@ -151,6 +151,9 @@ void Compiler::compileStatement(StmtPtr stmt) {
         void operator()(FnDecl& s) { c.compileFnDecl(s); }
         void operator()(GenDecl& s) { c.compileGenDecl(s); }
         void operator()(ClassDecl& s) { c.compileClassDecl(s); }
+        void operator()(StructDecl& s) { c.compileStructDecl(s); }
+        void operator()(ImplDecl& s) { c.compileImplDecl(s); }
+        void operator()(EnumDecl& s) { c.compileEnumDecl(s); }
         void operator()(TryStmt& s) { c.compileTryCatch(s); }
         void operator()(ExternFnDecl& s) { c.compileExternFn(s); }
         void operator()(ImportStmt& s) { c.compileImport(s); }
@@ -335,6 +338,89 @@ void Compiler::compileClassDecl(ClassDecl& decl) {
     currentClass_ = prev;
 }
 
+void Compiler::compileStructDecl(StructDecl& decl) {
+    std::vector<FnDecl> methods;
+    FnDecl initDecl;
+    initDecl.name = "init";
+    initDecl.params = decl.fields;
+    for (int i = 0; i < (int)decl.fields.size(); i++) {
+        auto object = std::make_shared<Expr>();
+        object->node = ThisLiteral{};
+        auto member = decl.fields[i];
+        auto value = std::make_shared<Expr>();
+        value->node = Identifier{decl.fields[i]};
+        auto assign = std::make_shared<Expr>();
+        assign->node = AssignMemberExpr{object, member, value};
+        auto stmt = std::make_shared<Stmt>();
+        stmt->node = ExprStmt{assign};
+        initDecl.body.push_back(stmt);
+    }
+    methods.push_back(initDecl);
+    ClassDecl classDecl{decl.name, methods, nullptr};
+    compileClassDecl(classDecl);
+}
+
+void Compiler::compileImplDecl(ImplDecl& decl) {
+    uint16_t nameIdx = addConstant(Value::obj(std::make_shared<ObjString>(decl.className)));
+
+    auto* classState = new Compiler::ClassCompilerState();
+    classState->enclosing = currentClass_;
+    classState->hasSuperclass = false;
+    currentClass_ = classState;
+
+    if (current_->scopeDepth > 0) {
+        emitOpOperand16(OP_GET_LOCAL, (uint16_t)resolveLocal(decl.className));
+    } else {
+        emitOpOperand16(OP_GET_GLOBAL, nameIdx);
+    }
+
+    for (auto& method : decl.methods) {
+        auto fn = std::make_shared<ObjFunction>();
+        fn->name = method.name;
+        fn->arity = (int)method.params.size();
+
+        auto* prev = current_;
+        pushCompiler(fn);
+        current_->function->arity = fn->arity;
+        current_->function->name = method.name;
+
+        beginScope();
+        current_->locals[0].name = "this";
+        for (int i = 0; i < (int)method.params.size(); i++) {
+            addLocal(method.params[i], false);
+        }
+        compileStatements(method.body);
+        if (method.name == "init") {
+            emitOpOperand16(OP_GET_LOCAL, 0);
+        } else {
+            emitOp(OP_NIL);
+        }
+        emitOp(OP_RETURN);
+        endScope();
+
+        auto compiledFn = popCompiler()->function;
+        current_ = prev;
+
+        emitOpOperand16(OP_CLOSURE, addConstant(Value::obj(compiledFn)));
+        uint16_t methodNameIdx = addConstant(Value::obj(std::make_shared<ObjString>(method.name)));
+        emitOpOperand16(OP_METHOD, methodNameIdx);
+    }
+
+    emitOp(OP_POP);
+    auto* prevClass = classState->enclosing;
+    delete currentClass_;
+    currentClass_ = prevClass;
+}
+
+void Compiler::compileEnumDecl(EnumDecl& decl) {
+    for (auto& variant : decl.variants) {
+        uint16_t valIdx = addConstant(Value::obj(std::make_shared<ObjString>(variant)));
+        uint16_t nameIdx = addConstant(Value::obj(std::make_shared<ObjString>(variant)));
+        emitConstant(Value::obj(std::make_shared<ObjString>(variant)));
+        emitOpOperand16(OP_DEFINE_GLOBAL, nameIdx);
+    }
+}
+
 void Compiler::compileReturn(ReturnStmt& stmt) {
     if (stmt.value) {
         compileExpression(stmt.value);
@@ -348,24 +434,33 @@ void Compiler::compileIf(IfStmt& stmt) {
     compileExpression(stmt.condition);
     int thenJump = emitJump(OP_JUMP_IF_FALSE);
     emitOp(OP_POP);
+    beginScope();
     compileStatements(stmt.thenBranch);
+    endScope();
     if (!stmt.elseBranch.empty()) {
         int elseJump = emitJump(OP_JUMP);
         patchJump(thenJump);
         emitOp(OP_POP);
+        beginScope();
         compileStatements(stmt.elseBranch);
+        endScope();
         patchJump(elseJump);
     } else {
+        int endJump = emitJump(OP_JUMP);
         patchJump(thenJump);
+        emitOp(OP_POP);
+        patchJump(endJump);
     }
 }
 
 void Compiler::compileWhile(WhileStmt& stmt) {
+    beginScope();
     int loopStart = (int)currentChunk().code.size();
     compileExpression(stmt.condition);
     int exitJump = emitJump(OP_JUMP_IF_FALSE);
     emitOp(OP_POP);
     compileStatements(stmt.body);
+    endScope();
     emitLoop(loopStart);
     patchJump(exitJump);
     emitOp(OP_POP);

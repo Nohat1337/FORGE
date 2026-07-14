@@ -1,5 +1,6 @@
 #include "fvm/runtime.hpp"
 #include "pkg_manager.hpp"
+#include "forge_build.hpp"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -54,6 +55,7 @@ int main(int argc, char* argv[]) {
             std::cout << "  -h, --help       Show this help\n";
             std::cout << "  -e <code>        Execute string as code\n";
             std::cout << "  pkg <cmd>        Package manager commands\n";
+            std::cout << "  build            Build project from ForgeLists.txt\n";
             std::cout << "  --gc-stats       Show GC statistics after execution\n";
             std::cout << "  (no args)        Start REPL\n";
             return 0;
@@ -68,6 +70,10 @@ int main(int argc, char* argv[]) {
             int pkgArgc = argc - i - 1;
             char** pkgArgv = argv + i + 1;
             return pkg_main(pkgArgc, pkgArgv);
+        } else if (arg == "build") {
+            int buildArgc = argc - i - 1;
+            char** buildArgv = argv + i + 1;
+            return forge::build::build_main(buildArgc, buildArgv);
         }
     }
 
@@ -94,6 +100,7 @@ int main(int argc, char* argv[]) {
 
     try {
         forge::fvm::ForgeVM vm;
+        vm.setArgs(argc, argv);
         if (!vm.interpretSource(readFile(filename), filename)) {
             return 1;
         }

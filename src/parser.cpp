@@ -37,6 +37,9 @@ StmtPtr Parser::parseStatement() {
     if (check(TokenType::FN)) { advance(); return parseFnDecl(); }
     if (check(TokenType::GEN)) { advance(); return parseGenDecl(); }
     if (check(TokenType::CLASS)) return parseClassDecl();
+    if (check(TokenType::STRUCT)) { advance(); return parseStructDecl(); }
+    if (check(TokenType::IMPL)) { advance(); return parseImplDecl(); }
+    if (check(TokenType::ENUM)) { advance(); return parseEnumDecl(); }
     if (check(TokenType::RETURN)) return parseReturn();
     if (check(TokenType::IF)) return parseIf();
     if (check(TokenType::WHILE)) return parseWhile();
@@ -238,6 +241,61 @@ StmtPtr Parser::parseClassDecl() {
     expect(TokenType::RBRACE, "Expected '}'");
     skipNewlines();
     return makeStmt(ClassDecl{name.value, methods, superclass});
+}
+
+StmtPtr Parser::parseStructDecl() {
+    Token name = expect(TokenType::IDENTIFIER, "Expected struct name");
+    expect(TokenType::LBRACE, "Expected '{'");
+    skipNewlines();
+    std::vector<std::string> fields;
+    while (!check(TokenType::RBRACE) && !check(TokenType::EOF_TOKEN)) {
+        Token field = expect(TokenType::IDENTIFIER, "Expected field name");
+        fields.push_back(field.value);
+        skipNewlines();
+    }
+    expect(TokenType::RBRACE, "Expected '}'");
+    skipNewlines();
+    return makeStmt(StructDecl{name.value, fields});
+}
+
+StmtPtr Parser::parseImplDecl() {
+    Token className = expect(TokenType::IDENTIFIER, "Expected class name after 'impl'");
+    expect(TokenType::LBRACE, "Expected '{'");
+    skipNewlines();
+    std::vector<FnDecl> methods;
+    while (!check(TokenType::RBRACE) && !check(TokenType::EOF_TOKEN)) {
+        expect(TokenType::FN, "Expected 'fn' for method");
+        Token methodName = expect(TokenType::IDENTIFIER, "Expected method name");
+        expect(TokenType::LPAREN, "Expected '('");
+        std::vector<std::string> params;
+        if (!check(TokenType::RPAREN)) {
+            do { Token p = expect(TokenType::IDENTIFIER, "Expected parameter"); params.push_back(p.value); }
+            while (match(TokenType::COMMA));
+        }
+        expect(TokenType::RPAREN, "Expected ')'");
+        auto body = std::get<BlockStmt>(parseBlock()->node).statements;
+        methods.push_back(FnDecl{methodName.value, params, body});
+        skipNewlines();
+    }
+    expect(TokenType::RBRACE, "Expected '}'");
+    skipNewlines();
+    return makeStmt(ImplDecl{className.value, methods});
+}
+
+StmtPtr Parser::parseEnumDecl() {
+    Token name = expect(TokenType::IDENTIFIER, "Expected enum name");
+    expect(TokenType::LBRACE, "Expected '{'");
+    skipNewlines();
+    std::vector<std::string> variants;
+    while (!check(TokenType::RBRACE) && !check(TokenType::EOF_TOKEN)) {
+        Token variant = expect(TokenType::IDENTIFIER, "Expected variant name");
+        variants.push_back(variant.value);
+        match(TokenType::COMMA);
+        skipNewlines();
+    }
+    expect(TokenType::RBRACE, "Expected '}'");
+    skipNewlines();
+    return makeStmt(EnumDecl{name.value, variants});
 }
 
 StmtPtr Parser::parseTryCatch() {

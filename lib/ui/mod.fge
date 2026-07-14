@@ -1,15 +1,11 @@
-// Forge UI Library - Main Entry Point
-// Re-exports all modules
+// Forge UI Module Entry Point
+// Import this as: import "ui/mod"
+// Provides all UI components
 
-import "ui/ui"
+// Low-level terminal functions are provided by the native ui module
+// This file provides higher-level components built on top of them
+
 import "ui/theme"
-import "ui/components"
+import "ui/syntax"
 import "ui/editor"
 import "ui/file_explorer"
-import "ui/repl"
-import "ui/syntax"
-import "ui/theme"
-import "ui/native"
-
-// Re-export all public APIs
-// All modules are automatically available when importing "ui"

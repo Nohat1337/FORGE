@@ -1,333 +1,103 @@
-// Forge UI Library - REPL Panel
-// Written in Forge, runs on FVM
+// Forge UI REPL Module
+// Interactive command panel
 
-import "ui/ui"
-import "os"
-import "repl"
-
-struct ReplEntry {
-    type: ReplType
-    text: string
-}
-
-enum ReplType {
-    Input,
-    Output,
-    Error,
-    Result
-}
-
-struct Repl {
-    history: list<string>
-    history_index: int
-    input_buffer: string
-    entries: list<ReplEntry>
-    scroll: int
-    active: bool
-    context: ReplContext?
-}
-
-struct ReplContext {
-    variables: map<string, any>
-    functions: map<string, any>
-}
-
-impl Repl {
-    fn new() -> Repl {
-        Repl {
-            history: [],
-            history_index: 0,
-            input_buffer: "",
-            entries: [
-                ReplEntry { type: ReplType.Output, text: "Forge REPL v1.0" },
-                ReplEntry { type: ReplType.Output, text: "Type 'help' for commands, 'exit' to quit" },
-                ReplEntry { type: ReplType.Output, text: "" },
-            ],
-            scroll: 0,
-            active: false,
-            context: Some(ReplContext { variables: {}, functions: {} })
-        }
+class Repl {
+    fn init() {
+        this.lines = [];
+        this.input_line = "";
+        this.cursor_pos = 0;
+        this.history = [];
+        this.history_idx = -1;
+        this.visible_lines = 10;
     }
-    
-    fn run_command(this: *Repl, cmd: string) {
-        this.history.push(cmd)
-        this.history_index = this.history.len()
-        
-        this.entries.push(ReplEntry { type: ReplType.Input, text: ">> " + cmd })
-        
-        if cmd == "exit" || cmd == "quit" {
-            os.exit(0)
-        }
-        
-        if cmd == "help" {
-            this.entries.push(ReplEntry { type: ReplType.Output, text: "Commands:" })
-            this.entries.push(ReplEntry { type: ReplType.Output, text: "  help          - Show this help" })
-            this.entries.push(ReplEntry { type: ReplType.Output, text: "  exit, quit    - Exit REPL" })
-            this.entries.push(ReplEntry { type: ReplType.Output, text: "  clear         - Clear screen" })
-            this.entries.push(ReplEntry { type: ReplType.Output, text: "  vars          - List variables" })
-            this.entries.push(ReplEntry { type: ReplType.Output, text: "  funcs         - List functions" })
-            this.entries.push(ReplEntry { type: ReplType.Output, text: "  run <file>    - Run Forge file" })
-            this.entries.push(ReplEntry { type: ReplType.Output, text: "  load <file>   - Load Forge file into REPL" })
-            this.entries.push(ReplEntry { type: ReplType.Output, text: "  reset         - Reset REPL state" })
-            this.entries.push(ReplEntry { type: ReplType.Output, text: "" })
-            return
-        }
-        
-        if cmd == "clear" {
-            this.entries.clear()
-            this.entries.push(ReplEntry { type: ReplType.Output, text: "Forge REPL v1.0" })
-            this.entries.push(ReplEntry { type: ReplType.Output, text: "Type 'help' for commands, 'exit' to quit" })
-            this.entries.push(ReplEntry { type: ReplType.Output, text: "" })
-            return
-        }
-        
-        if cmd == "vars" {
-            if let Some(ctx) = &this.context {
-                if ctx.variables.is_empty() {
-                    this.entries.push(ReplEntry { type: ReplType.Output, text: "No variables defined" })
+
+    fn execute(code) {
+        push(this.lines, "> " + code);
+        push(this.history, code);
+        this.history_idx = len(this.history);
+        // Output would come from the actual forgevm execution
+        // For now, just echo
+        push(this.lines, code);
+    }
+
+    fn handle_key(key) {
+        if (key["type"] == "char") {
+            let ch = key["key"];
+            if (ch == "\n") {
+                if (len(this.input_line) > 0) {
+                    this.execute(this.input_line);
+                    this.input_line = "";
+                    this.cursor_pos = 0;
+                }
+            } else if (ch == "\x7f") {
+                // Backspace
+                if (this.cursor_pos > 0) {
+                    let before = substring(this.input_line, 0, this.cursor_pos - 1);
+                    let after = substring(this.input_line, this.cursor_pos);
+                    this.input_line = before + after;
+                    this.cursor_pos = this.cursor_pos - 1;
+                }
+            } else {
+                let before = substring(this.input_line, 0, this.cursor_pos);
+                let after = substring(this.input_line, this.cursor_pos);
+                this.input_line = before + ch + after;
+                this.cursor_pos = this.cursor_pos + 1;
+            }
+        } else if (key["type"] == "arrow") {
+            if (key["key"] == "left") {
+                if (this.cursor_pos > 0) this.cursor_pos = this.cursor_pos - 1;
+            } else if (key["key"] == "right") {
+                if (this.cursor_pos < len(this.input_line)) this.cursor_pos = this.cursor_pos + 1;
+            } else if (key["key"] == "up") {
+                if (this.history_idx > 0) {
+                    this.history_idx = this.history_idx - 1;
+                    this.input_line = this.history[this.history_idx];
+                    this.cursor_pos = len(this.input_line);
+                }
+            } else if (key["key"] == "down") {
+                if (this.history_idx + 1 < len(this.history)) {
+                    this.history_idx = this.history_idx + 1;
+                    this.input_line = this.history[this.history_idx];
+                    this.cursor_pos = len(this.input_line);
                 } else {
-                    for (k, v) in ctx.variables {
-                        this.entries.push(ReplEntry { type: ReplType.Output, text: k + " = " + v.to_string() })
-                    }
+                    this.history_idx = len(this.history);
+                    this.input_line = "";
+                    this.cursor_pos = 0;
                 }
-            }
-            this.entries.push(ReplEntry { type: ReplType.Output, text: "" })
-            return
-        }
-        
-        if cmd == "funcs" {
-            if let Some(ctx) = &this.context {
-                if ctx.functions.is_empty() {
-                    this.entries.push(ReplEntry { type: ReplType.Output, text: "No functions defined" })
-                } else {
-                    for (k, v) in ctx.functions {
-                        this.entries.push(ReplEntry { type: ReplType.Output, text: k + " = " + v.to_string() })
-                    }
-                }
-            }
-            this.entries.push(ReplEntry { type: ReplType.Output, text: "" })
-            return
-        }
-        
-        if cmd == "reset" {
-            this.context = Some(ReplContext { variables: {}, functions: {} })
-            this.entries.push(ReplEntry { type: ReplType.Output, text: "REPL state reset" })
-            this.entries.push(ReplEntry { type: ReplType.Output, text: "" })
-            return
-        }
-        
-        if cmd.starts_with("run ") {
-            let file = cmd.substr(4).trim()
-            this.run_file(file)
-            return
-        }
-        
-        if cmd.starts_with("load ") {
-            let file = cmd.substr(5).trim()
-            this.load_file(file)
-            return
-        }
-        
-        // Execute as Forge code
-        let result = repl_eval(cmd, &mut this.context)
-        match result {
-            Ok(Some(val)) => {
-                this.entries.push(ReplEntry { type: ReplType.Result, text: val.to_string() })
-                this.entries.push(ReplEntry { type: ReplType.Output, text: "" })
-            }
-            Ok(None) => {
-                this.entries.push(ReplEntry { type: ReplType.Output, text: "" })
-            }
-            Err(e) => {
-                this.entries.push(ReplEntry { type: ReplType.Error, text: "Error: " + e })
-                this.entries.push(ReplEntry { type: ReplType.Output, text: "" })
             }
         }
     }
-    
-    fn run_file(this: *Repl, path: string) {
-        let content = fs.read_file(path)
-        if content.is_err() {
-            this.entries.push(ReplEntry { type: ReplType.Error, text: "Error: " + content.unwrap_err() })
-            this.entries.push(ReplEntry { type: ReplType.Output, text: "" })
-            return
-        }
-        let content = content.unwrap()
-        let lines = content.split('\n')
-        for line in lines {
-            let line = line.trim()
-            if line != "" && !line.starts_with("//") {
-                let result = repl_eval(line, &mut this.context)
-                match result {
-                    Ok(Some(val)) => this.entries.push(ReplEntry { type: ReplType.Result, text: val.to_string() })
-                    Ok(None) => {}
-                    Err(e) => {
-                        this.entries.push(ReplEntry { type: ReplType.Error, text: "Error: " + e })
-                        break
-                    }
-                }
+
+    fn clear() {
+        this.lines = [];
+    }
+
+    fn render(x, y, width, height, theme) {
+        ui.draw_rect(x, y, width, height, theme.panelBg);
+        let title = " REPL ";
+        ui.draw_text(x + 1, y, title, theme.fg, theme.panelBg, true);
+
+        // Output lines
+        let row = y + 1;
+        let start = max(0, len(this.lines) - (height - 3));
+        let i = start;
+        while (i < len(this.lines) && row < y + height - 2) {
+            let line = this.lines[i];
+            if (len(line) > width - 2) {
+                line = substring(line, 0, width - 2);
             }
+            ui.draw_text(x + 1, row, line, theme.fg, theme.panelBg, false);
+            row = row + 1;
+            i = i + 1;
         }
-        this.entries.push(ReplEntry { type: ReplType.Output, text: "" })
-    }
-    
-    fn load_file(this: *Repl, path: string) {
-        let content = fs.read_file(path)
-        if content.is_err() {
-            this.entries.push(ReplEntry { type: ReplType.Error, text: "Error: " + content.unwrap_err() })
-            this.entries.push(ReplEntry { type: ReplType.Output, text: "" })
-            return
-        }
-        let content = content.unwrap()
-        let result = repl_eval(content, &mut this.context)
-        match result {
-            Ok(Some(val)) => this.entries.push(ReplEntry { type: ReplType.Result, text: val.to_string() })
-            Ok(None) => {}
-            Err(e) => this.entries.push(ReplEntry { type: ReplType.Error, text: "Error: " + e })
-        }
-        this.entries.push(ReplEntry { type: ReplType.Output, text: "" })
-    }
-    
-    fn activate(this: *Repl) { this.active = true }
-    fn deactivate(this: *Repl) { this.active = false }
-    fn clear(this: *Repl) {
-        this.entries.clear()
-        this.entries.push(ReplEntry { type: ReplType.Output, text: "Forge REPL v1.0" })
-        this.entries.push(ReplEntry { type: ReplType.Output, text: "Type 'help' for commands, 'exit' to quit" })
-        this.entries.push(ReplEntry { type: ReplType.Output, text: "" })
-    }
-    
-    fn get_prompt(this: *Repl) -> string { "forge> " }
-    fn get_prompt_len(this: *Repl) -> int { 7 }
-    
-    fn render(this: *Repl, x: int, y: int, w: int, h: int, theme: Theme) {
-        // Background
-        ui.draw_rect(x, y, w, h, theme.panel_bg)
-        
-        // Title bar
-        ui.draw_rect(x, y, w, 1, theme.panel_bg)
-        ui.draw_text(x + 1, y, " REPL ", theme.panel_bg, theme.accent1, true)
-        
-        // Separator
-        ui.draw_hline(x, y + 1, w, theme.panel_border)
-        
-        // Entries
-        let visible = h - 3
-        let start = this.scroll
-        let end = min(this.entries.len(), start + visible)
-        
-        for i in start..end {
-            let entry = &this.entries[i]
-            let row = y + 2 + i - start
-            let indent = "  "
-            
-            match entry.type {
-                ReplType.Input => {
-                    ui.draw_text(x + 1, row, indent + entry.text, theme.panel_bg, theme.accent1, false)
-                }
-                ReplType.Output => {
-                    if entry.text == "" {
-                        // Empty line
-                    } else if entry.text.starts_with("Error") {
-                        ui.draw_text(x + 1, row, indent + entry.text, theme.panel_bg, theme.error, false)
-                    } else {
-                        ui.draw_text(x + 1, row, indent + entry.text, theme.panel_bg, theme.panel_fg, false)
-                    }
-                }
-                ReplType.Error => {
-                    ui.draw_text(x + 1, row, indent + entry.text, theme.panel_bg, theme.error, false)
-                }
-                ReplType.Result => {
-                    ui.draw_text(x + 1, row, indent + "=> " + entry.text, theme.panel_bg, theme.accent4, false)
-                }
-            }
-        }
-        
+
         // Input line
-        let input_row = y + h - 1
-        let prompt = "forge> "
-        let display = prompt + this.input_buffer + "█"
-        ui.draw_text(x + 1, input_row, display, theme.panel_bg, theme.panel_fg, false)
-    }
-    
-    fn handle_key(this: *Repl, key: KeyEvent) -> bool {
-        if !this.active { return false }
-        
-        match key.code {
-            Key::Enter => {
-                if !key.shift {
-                    let cmd = this.input_buffer.trim().to_string()
-                    this.run_command(cmd)
-                    this.input_buffer = ""
-                    this.scroll_to_bottom()
-                    return true
-                }
-            }
-            Key::Backspace => {
-                if this.input_buffer.len() > 0 {
-                    this.input_buffer.pop()
-                    return true
-                }
-            }
-            Key::Up => {
-                if this.history_index > 0 {
-                    this.history_index--
-                    this.input_buffer = this.history[this.history_index].clone()
-                    return true
-                }
-            }
-            Key::Down => {
-                if this.history_index + 1 < this.history.len() {
-                    this.history_index++
-                    this.input_buffer = this.history[this.history_index].clone()
-                    return true
-                } else {
-                    this.history_index = this.history.len()
-                    this.input_buffer = ""
-                    return true
-                }
-            }
-            Key::Left => { /* Move cursor left */ }
-            Key::Right => { /* Move cursor right */ }
-            Key::Home => { /* Move to start */ }
-            Key::End => { /* Move to end */ }
-            Key::Escape => {
-                this.input_buffer = ""
-                return true
-            }
-            Key::Char(c) => {
-                this.input_buffer.push(c)
-                return true
-            }
+        let input_y = y + height - 1;
+        let prompt = "> ";
+        let display = prompt + this.input_line;
+        if (len(display) > width - 2) {
+            display = substring(display, 0, width - 2);
         }
-        false
+        ui.draw_text(x + 1, input_y, display, theme.fg, theme.statusBg, false);
     }
-    
-    fn scroll_to_bottom(this: *Repl) {
-        let visible = 20 // approximate
-        if this.entries.len() > visible {
-            this.scroll = this.entries.len() - visible
-        }
-    }
-    
-    fn clear(this: *Repl) {
-        this.entries.clear()
-        this.entries.push(ReplEntry { type: ReplType.Output, text: "Forge REPL v1.0" })
-        this.entries.push(ReplEntry { type: ReplType.Output, text: "Type 'help' for commands, 'exit' to quit" })
-        this.entries.push(ReplEntry { type: ReplType.Output, text: "" })
-    }
-}
-
-// Internal REPL evaluation
-fn repl_eval(code: string, context: &mut Option<ReplContext>) -> Result<Option<string>, string> {
-    if code.trim() == "" { return Ok(None) }
-    
-    // This would integrate with the actual Forge interpreter
-    // For now, return a placeholder
-    None
-}
-
-fn native_repl_eval(code: string, context: &mut Option<ReplContext>) -> Option<any> {
-    // This would call into the actual Forge interpreter
-    None
 }

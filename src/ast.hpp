@@ -191,6 +191,21 @@ struct ClassDecl {
     ExprPtr superclass;
 };
 
+struct StructDecl {
+    std::string name;
+    std::vector<std::string> fields;
+};
+
+struct ImplDecl {
+    std::string className;
+    std::vector<FnDecl> methods;
+};
+
+struct EnumDecl {
+    std::string name;
+    std::vector<std::string> variants;
+};
+
 struct TryStmt {
     std::vector<StmtPtr> body;
     std::string catchVar;
@@ -212,7 +227,9 @@ struct ImportStmt {
 struct Stmt {
     using Variant = std::variant<
         ExprStmt, VarDecl, ReturnStmt, IfStmt, WhileStmt,
-        ForStmt, ForInStmt, BlockStmt, FnDecl, GenDecl, ClassDecl, TryStmt, ExternFnDecl, ImportStmt
+        ForStmt, ForInStmt, BlockStmt, FnDecl, GenDecl, ClassDecl,
+        StructDecl, ImplDecl, EnumDecl,
+        TryStmt, ExternFnDecl, ImportStmt
     >;
     Variant node;
     int line = 0;

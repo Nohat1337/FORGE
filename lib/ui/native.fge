@@ -1,129 +1,48 @@
-// Forge UI Library - Graphics & Native Backend
-// Written in Forge, runs on FVM
+// Forge UI Native Helpers
+// Thin wrappers around the native ui module
 
-import "ui/components"
-
-// ============================================================
-// Graphics Context
-// ============================================================
-
-struct Graphics {
-    // Native handle (platform-specific)
-    native_handle: void*
+fn init_terminal() {
+    ui.init()
+    ui.enter_alt_screen()
+    ui.enable_raw_mode()
+    ui.clear(235)
+    ui.flush()
 }
 
-impl Graphics {
-    fn draw_string(this: *Graphics, text: string, x: int, y: int) = 0
-    fn draw_rect(this: *Graphics, x: int, y: int, width: int, height: int) = 0
-    fn fill_rect(this: *Graphics, x: int, y: int, width: int, height: int) = 0
-    fn set_color(this: *Graphics, rgba: uint32_t) = 0
-    fn set_font(this: *Graphics, name: string, size: int, bold: bool, italic: bool) = 0
-    fn get_size(this: *Graphics) -> (int, int) = 0
+fn cleanup_terminal() {
+    ui.disable_raw_mode()
+    ui.exit_alt_screen()
+    ui.cleanup()
 }
 
-// ============================================================
-// Native UI Backends (Platform-specific)
-// ============================================================
-
-namespace native {
-    // Platform detection
-    #if target_os = "linux"
-        const PLATFORM = "linux"
-    #elif target_os = "macos"
-        const PLATFORM = "macos"
-    #elif target_os = "windows"
-        const PLATFORM = "windows"
-    #else
-        const PLATFORM = "unknown"
-    #endif
-    
-    // Initialize platform UI
-    fn init_platform_ui() {
-        #if target_os = "linux"
-            // Initialize GTK/Wayland/X11
-        #elif target_os = "macos"
-            // Initialize Cocoa
-        #elif target_os = "windows"
-            // Initialize Win32
-        #endif
-    }
-    
-    fn shutdown_platform_ui() {
-        // Cleanup
-    }
-    
-    // Window operations
-    fn create_window(title: string, x: int, y: int, w: int, h: int, resizable: bool) -> void*
-    fn show_window(handle: void*)
-    fn hide_window(handle: void*)
-    fn destroy_window(handle: void*)
-    fn set_window_title(handle: void*, title: string)
-    fn set_window_bounds(handle: void*, x: int, y: int, w: int, h: int)
-    
-    // Graphics
-    fn create_graphics(window_handle: void*) -> Graphics*
-    fn destroy_graphics(g: Graphics*)
-    
-    // Event pump
-    fn pump_events()
-    fn has_pending_events() -> bool
-    
-    // Clipboard
-    fn set_clipboard_text(text: string)
-    fn get_clipboard_text() -> string
-    
-    // File dialogs
-    fn show_open_file_dialog(title: string, filters: list<(string, string)>) -> string?
-    fn show_save_file_dialog(title: string, filters: list<(string, string)>, default: string) -> string?
-    fn show_folder_dialog(title: string, dir: string) -> string?
-    
-    // Message dialogs
-    fn show_message_dialog(parent: void*, message: string, title: string, type: int) -> int
-    fn show_confirm_dialog(parent: void*, message: string, title: string, type: int) -> int
-    fn show_input_dialog(parent: void*, message: string, title: string, default: string) -> string?
+fn get_terminal_size() {
+    return ui.get_size()
 }
 
-// Platform-specific implementations would be in separate files
-// For now, we'll provide stub implementations
-
-// ============================================================
-// Stub implementations for development
-// ============================================================
-
-fn init_platform_ui() {
-    // Stub
+fn draw_text(x, y, text, fg, bg, bold) {
+    ui.draw_text(x, y, text, fg, bg, bold)
 }
 
-fn shutdown_platform_ui() {
-    // Stub
+fn draw_rect(x, y, w, h, bg) {
+    ui.draw_rect(x, y, w, h, bg)
 }
 
-fn create_window(title: string, x: int, y: int, w: int, h: int, resizable: bool) -> void* {
-    0
+fn draw_char(x, y, ch, fg, bg) {
+    ui.draw_char(x, y, ch, fg, bg)
 }
 
-fn show_window(handle: void*) {}
-fn hide_window(handle: void*) {}
-fn destroy_window(handle: void*) {}
-fn set_window_title(handle: void*, title: string) {}
-fn set_window_bounds(handle: void*, x: int, y: int, w: int, h: int) {}
-
-fn create_graphics(window_handle: void*) -> Graphics* {
-    0
+fn flush() {
+    ui.flush()
 }
 
-fn destroy_graphics(g: Graphics*) {}
+fn clear_screen(bg) {
+    ui.clear(bg)
+}
 
-fn pump_events() {}
-fn has_pending_events() -> bool { false }
+fn read_key() {
+    return ui.read_key()
+}
 
-fn set_clipboard_text(text: string) {}
-fn get_clipboard_text() -> string { "" }
-
-fn show_open_file_dialog(title: string, filters: list<(string, string)>) -> string? { None }
-fn show_save_file_dialog(title: string, filters: list<(string, string)>, default: string) -> string? { None }
-fn show_folder_dialog(title: string, dir: string) -> string? { None }
-
-fn show_message_dialog(parent: void*, message: string, title: string, type: int) -> int { 0 }
-fn show_confirm_dialog(parent: void*, message: string, title: string, type: int) -> int { 0 }
-fn show_input_dialog(parent: void*, message: string, title: string, default: string) -> string? { None }
+fn poll_input(timeout_ms) {
+    return ui.poll_input(timeout_ms)
+}

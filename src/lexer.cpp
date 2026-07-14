@@ -12,6 +12,7 @@ const std::unordered_map<std::string, TokenType> Lexer::keywords_ = {
     {"or", TokenType::OR}, {"not", TokenType::NOT},
     {"class", TokenType::CLASS}, {"this", TokenType::THIS},
     {"super", TokenType::SUPER}, {"extends", TokenType::EXTENDS},
+    {"struct", TokenType::STRUCT}, {"impl", TokenType::IMPL}, {"enum", TokenType::ENUM},
     {"match", TokenType::MATCH}, {"case", TokenType::CASE},
     {"_", TokenType::WILDCARD},
     {"try", TokenType::TRY}, {"catch", TokenType::CATCH},

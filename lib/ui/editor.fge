@@ -1,501 +1,283 @@
-// Forge Studio - Terminal IDE for Forge Language
-// Written in Forge, runs on FVM
+// Forge UI Editor Module
+// Text editor model with cursor, selection, and editing operations
 
-import "ui/ui"
-import "ui/theme"
-import "ui/components"
-import "ui/native"
-import "fs"
-import "os"
-import "repl"
-import "syntax"
-import "theme"
-
-// ============================================================
-// Types
-// ============================================================
-
-type Position = { line: int, col: int }
-type Range = { start: Position, end: Position }
-type Token = { type: string, text: string, line: int, col: int }
-type Style = { fg: int, bg: int, bold: bool, italic: bool, underline: bool }
-
-// ============================================================
-// Editor
-// ============================================================
-
-struct UndoAction {
-    enum Type { INSERT, DELETE_LINE, DELETE_CHARS }
-    type: Type
-    line: int
-    col: int
-    count: int
-    text: string
-}
-
-struct Selection {
-    start_line: int
-    start_col: int
-    end_line: int
-    end_col: int
-    active: bool
-}
-
-struct Editor {
-    lines: list<string>
-    cursor_line: int
-    cursor_col: int
-    scroll_line: int
-    scroll_col: int
-    selection: Selection
-    modified: bool
-    filepath: string?
-    syntax_cache: list<list<Style>>
-    undo_stack: list<UndoAction>
-    redo_stack: list<UndoAction>
-    clipboard: string
-}
-
-impl Editor {
-    fn new() -> Editor {
-        Editor {
-            lines: [""],
-            cursor_line: 0,
-            cursor_col: 0,
-            scroll_line: 0,
-            scroll_col: 0,
-            selection: Selection { active: false, start_line: -1, start_col: -1, end_line: -1, end_col: -1 },
-            modified: false,
-            filepath: nil,
-            syntax_cache: [[]],
-            undo_stack: [],
-            redo_stack: [],
-            clipboard: ""
-        }
+class Editor {
+    fn init() {
+        this.lines = [""];
+        this.cursor_row = 0;
+        this.cursor_col = 0;
+        this.scroll_top = 0;
+        this.scroll_left = 0;
+        this.modified = false;
+        this.file_path = "";
+        this.undo_stack = [];
+        this.redo_stack = [];
+        this.selection_start = -1;
+        this.selection_end = -1;
+        this.tab_width = 4;
     }
-    
-    fn load_file(this: *Editor, path: string) -> Result<(), string> {
-        let content = fs.read_file(path)
-        if content.is_err() { return Err(content.unwrap_err()) }
-        let text = content.unwrap()
-        this.lines = text.split('\n')
-        if this.lines.last() == "" { this.lines.pop() }
-        this.cursor_line = 0
-        this.cursor_col = 0
-        this.scroll_line = 0
-        this.scroll_col = 0
-        this.selection = Selection { active: false }
-        this.modified = false
-        this.filepath = Some(path)
-        this.rebuild_syntax()
-        Ok(())
-    }
-    
-    fn save(this: *Editor) -> Result<(), string> {
-        if this.filepath.is_none() { return Err("No file path") }
-        let text = this.lines.join('\n')
-        fs.write_file(this.filepath.unwrap(), text)
-        this.modified = false
-        Ok(())
-    }
-    
-    fn rebuild_syntax(this: *Editor) {
-        this.syntax_cache = []
-        for (i, line) in this.lines.enumerate() {
-            this.syntax_cache.push(highlight_line(line, i))
-        }
-    }
-    
-    fn rebuild_syntax_line(this: *Editor, line_num: int) {
-        this.syntax_cache[line_num] = highlight_line(this.lines[line_num], line_num)
-    }
-    
-    // Editing
-    fn insert_char(this: *Editor, c: char) {
-        if this.selection.active { this.delete_selection() }
-        this.push_undo(UndoAction { type: UndoAction.Type.INSERT, line: this.cursor_line, col: this.cursor_col, count: 1, text: c.to_string() })
-        this.lines[this.cursor_line].insert(this.cursor_col, c)
-        this.cursor_col++
-        this.modified = true
-        this.rebuild_syntax_line(this.cursor_line)
-    }
-    
-    fn insert_string(this: *Editor, s: string) {
-        for c in s {
-            if c == '\n' { this.insert_newline() }
-            else { this.insert_char(c) }
-        }
-    }
-    
-    fn delete_char(this: *Editor) {
-        if this.selection.active { this.delete_selection(); return }
-        if this.cursor_line >= this.lines.len() - 1 && this.cursor_col >= this.lines[this.cursor_line].len() { return }
-        
-        if this.cursor_col >= this.lines[this.cursor_line].len() {
-            this.push_undo(UndoAction { type: UndoAction.Type.DELETE_LINE, line: this.cursor_line, col: this.cursor_col, count: 0, text: this.lines[this.cursor_line + 1] })
-            this.lines[this.cursor_line] += this.lines[this.cursor_line + 1]
-            this.lines.remove(this.cursor_line + 1)
+
+    fn load(path) {
+        let content = io.read(path);
+        if (content == "") {
+            this.lines = [""];
         } else {
-            let deleted = this.lines[this.cursor_line][this.cursor_col]
-            this.push_undo(UndoAction { type: UndoAction.Type.DELETE_CHARS, line: this.cursor_line, col: this.cursor_col, count: 1, text: deleted.to_string() })
-            this.lines[this.cursor_line].remove(this.cursor_col)
+            this.lines = split(content, "\n");
         }
-        this.modified = true
+        this.file_path = path;
+        this.cursor_row = 0;
+        this.cursor_col = 0;
+        this.scroll_top = 0;
+        this.scroll_left = 0;
+        this.modified = false;
+        this.undo_stack = [];
+        this.redo_stack = [];
     }
-    
-    fn backspace(this: *Editor) {
-        if this.selection.active { this.delete_selection(); return }
-        if this.cursor_col == 0 && this.cursor_line == 0 { return }
-        
-        if this.cursor_col == 0 {
-            this.push_undo(UndoAction { type: UndoAction.Type.DELETE_LINE, line: this.cursor_line - 1, col: this.lines[this.cursor_line - 1].len(), count: 0, text: this.lines[this.cursor_line] })
-            this.cursor_col = this.lines[this.cursor_line - 1].len()
-            this.lines[this.cursor_line - 1] += this.lines[this.cursor_line]
-            this.lines.remove(this.cursor_line)
-            this.cursor_line--
-        } else {
-            let deleted = this.lines[this.cursor_line][this.cursor_col - 1]
-            this.push_undo(UndoAction { type: UndoAction.Type.DELETE_CHARS, line: this.cursor_line, col: this.cursor_col - 1, count: 1, text: deleted.to_string() })
-            this.lines[this.cursor_line].remove(this.cursor_col - 1)
-            this.cursor_col--
+
+    fn save() {
+        if (this.file_path == "") return false;
+        let content = join_lines(this.lines);
+        io.write(content, this.file_path);
+        this.modified = false;
+        return true;
+    }
+
+    fn save_as(path) {
+        let content = join_lines(this.lines);
+        io.write(content, path);
+        this.file_path = path;
+        this.modified = false;
+    }
+
+    fn insert_char(ch) {
+        push_to_undo(this);
+        let line = this.lines[this.cursor_row];
+        let before = substring(line, 0, this.cursor_col);
+        let after = substring(line, this.cursor_col);
+        this.lines[this.cursor_row] = before + ch + after;
+        this.cursor_col = this.cursor_col + 1;
+        this.modified = true;
+        this.redo_stack = [];
+    }
+
+    fn delete_char() {
+        let line = this.lines[this.cursor_row];
+        if (this.cursor_col < len(line)) {
+            push_to_undo(this);
+            let before = substring(line, 0, this.cursor_col);
+            let after = substring(line, this.cursor_col + 1);
+            this.lines[this.cursor_row] = before + after;
+            this.modified = true;
+            this.redo_stack = [];
+        } else if (this.cursor_row + 1 < len(this.lines)) {
+            push_to_undo(this);
+            let next_line = this.lines[this.cursor_row + 1];
+            this.lines[this.cursor_row] = line + next_line;
+            this.lines = remove_at(this.lines, this.cursor_row + 1);
+            this.modified = true;
+            this.redo_stack = [];
         }
-        this.modified = true
     }
-    
-    fn insert_newline(this: *Editor) {
-        if this.selection.active { this.delete_selection() }
-        
-        let current_line = this.lines[this.cursor_line].clone()
-        let after = current_line.substr(this.cursor_col)
-        this.lines[this.cursor_line] = current_line.substr(0, this.cursor_col)
-        
+
+    fn backspace() {
+        if (this.cursor_col > 0) {
+            push_to_undo(this);
+            let line = this.lines[this.cursor_row];
+            let before = substring(line, 0, this.cursor_col - 1);
+            let after = substring(line, this.cursor_col);
+            this.lines[this.cursor_row] = before + after;
+            this.cursor_col = this.cursor_col - 1;
+            this.modified = true;
+            this.redo_stack = [];
+        } else if (this.cursor_row > 0) {
+            push_to_undo(this);
+            let prev_line = this.lines[this.cursor_row - 1];
+            let cur_line = this.lines[this.cursor_row];
+            this.cursor_col = len(prev_line);
+            this.lines[this.cursor_row - 1] = prev_line + cur_line;
+            this.lines = remove_at(this.lines, this.cursor_row);
+            this.cursor_row = this.cursor_row - 1;
+            this.modified = true;
+            this.redo_stack = [];
+        }
+    }
+
+    fn insert_newline() {
+        push_to_undo(this);
+        let line = this.lines[this.cursor_row];
+        let before = substring(line, 0, this.cursor_col);
+        let after = substring(line, this.cursor_col);
+
         // Auto-indent
-        let indent = ""
-        for c in this.lines[this.cursor_line].chars() {
-            if c == ' ' || c == '\t' { indent += c }
-            else { break }
+        let indent = "";
+        let i = 0;
+        while (i < len(before) && (charAt(before, i) == " " || charAt(before, i) == "\t")) {
+            indent = indent + charAt(before, i);
+            i = i + 1;
         }
-        
-        // Add extra indent after { or :
-        let trimmed = this.lines[this.cursor_line].trim()
-        if !trimmed.is_empty() && (trimmed.ends_with('{') || trimmed.ends_with(':')) {
-            indent += "    "
-        }
-        
-        this.cursor_line++
-        this.lines.insert(this.cursor_line, indent + after)
-        this.cursor_col = indent.len()
-        
-        this.push_undo(UndoAction { type: UndoAction.Type.INSERT, line: this.cursor_line, col: 0, count: 0, text: "\n" })
-        this.modified = true
-        this.rebuild_syntax()
+
+        this.lines[this.cursor_row] = before;
+        this.lines = insert_at(this.lines, this.cursor_row + 1, indent + after);
+        this.cursor_row = this.cursor_row + 1;
+        this.cursor_col = len(indent);
+        this.modified = true;
+        this.redo_stack = [];
     }
-    
-    fn delete_selection(this: *Editor) {
-        if !this.selection.active { return }
-        
-        let sel = this.selection
-        let (start_line, start_col, end_line, end_col) = if sel.start_line < sel.end_line || (sel.start_line == sel.end_line && sel.start_col < sel.end_col) {
-            (sel.start_line, sel.start_col, sel.end_line, sel.end_col)
-        } else {
-            (sel.end_line, sel.end_col, sel.start_line, sel.start_col)
-        }
-        
-        let deleted_text = ""
-        for i in start_line..=end_line {
-            let s = if i == start_line { start_col } else { 0 }
-            let e = if i == end_line { end_col } else { this.lines[i].len() }
-            deleted_text += this.lines[i].substr(s, e - s)
-            if i < end_line { deleted_text += "\n" }
-        }
-        
-        this.push_undo(UndoAction { type: UndoAction.Type.DELETE_CHARS, line: start_line, col: start_col, count: end_line - start_line + 1, text: deleted_text })
-        
-        if start_line == end_line {
-            this.lines[start_line].remove(start_col, end_col - start_col)
-        } else {
-            let first = this.lines[start_line].substr(0, start_col)
-            let last = this.lines[end_line].substr(end_col)
-            this.lines[start_line] = first + last
-            this.lines.remove_range(start_line + 1 ..= end_line)
-        }
-        
-        this.cursor_line = start_line
-        this.cursor_col = start_col
-        this.selection = Selection { active: false }
-        this.modified = true
-        this.rebuild_syntax()
-    }
-    
-    // Navigation
-    fn move_up(this: *Editor) { if this.cursor_line > 0 { this.cursor_line--; this.clamp_cursor() } }
-    fn move_down(this: *Editor) { if this.cursor_line + 1 < this.lines.len() { this.cursor_line++; this.clamp_cursor() } }
-    fn move_left(this: *Editor) { if this.cursor_col > 0 { this.cursor_col-- } else if this.cursor_line > 0 { this.cursor_line--; this.cursor_col = this.lines[this.cursor_line].len() } }
-    fn move_right(this: *Editor) { if this.cursor_col < this.lines[this.cursor_line].len() { this.cursor_col++ } else if this.cursor_line + 1 < this.lines.len() { this.cursor_line++; this.cursor_col = 0 } }
-    fn move_home(this: *Editor) {
-        let line = &this.lines[this.cursor_line]
-        let first = 0
-        while first < line.len() && (line[first] == ' ' || line[first] == '\t') { first++ }
-        if this.cursor_col == first { this.cursor_col = 0 } else { this.cursor_col = first }
-    }
-    fn move_end(this: *Editor) { this.cursor_col = this.lines[this.cursor_line].len() }
-    fn page_up(this: *Editor, height: int) { this.cursor_line = max(0, this.cursor_line - height); this.clamp_cursor() }
-    fn page_down(this: *Editor, height: int) { this.cursor_line = min(this.lines.len() - 1, this.cursor_line + height); this.clamp_cursor() }
-    fn move_to_line(this: *Editor, line: int) { this.cursor_line = line - 1; this.clamp_cursor() }
-    fn move_to_start(this: *Editor) { this.cursor_line = 0; this.cursor_col = 0 }
-    fn move_to_end(this: *Editor) { this.cursor_line = this.lines.len() - 1; this.cursor_col = this.lines[this.cursor_line].len() }
-    
-    // Selection
-    fn start_selection(this: *Editor) {
-        if !this.selection.active {
-            this.selection = Selection { start_line: this.cursor_line, start_col: this.cursor_col, end_line: this.cursor_line, end_col: this.cursor_col, active: true }
-        }
-    }
-    
-    fn clear_selection(this: *Editor) { this.selection = Selection { active: false } }
-    fn has_selection(this: *Editor) -> bool { this.selection.active }
-    fn get_selection(this: *Editor) -> Selection { this.selection }
-    
-    // Undo/Redo
-    fn push_undo(this: *Editor, action: UndoAction) {
-        this.undo_stack.push(action)
-        if this.undo_stack.len() > 1000 { this.undo_stack.remove(0) }
-        this.redo_stack.clear()
-    }
-    
-    fn undo(this: *Editor) {
-        if this.undo_stack.is_empty() { return }
-        let action = this.undo_stack.pop()
-        
-        this.clear_selection()
-        
-        match action.type {
-            UndoAction.Type.INSERT => {
-                if action.text == "\n" {
-                    // Undo newline
-                    if action.line + 1 < this.lines.len() {
-                        this.lines[action.line] = this.lines[action.line].substr(0, action.col)
-                        this.lines[action.line] += this.lines[action.line + 1]
-                        this.lines.remove(action.line + 1)
-                    }
-                    this.cursor_line = action.line
-                    this.cursor_col = action.col
-                } else {
-                    this.lines[action.line].remove(action.col, action.count)
-                    this.cursor_line = action.line
-                    this.cursor_col = action.col
-                }
-            }
-            UndoAction.Type.DELETE_CHARS => {
-                this.lines[action.line].insert(action.col, action.text)
-                this.cursor_line = action.line
-                this.cursor_col = action.col + action.count
-            }
-            UndoAction.Type.DELETE_LINE => {
-                this.lines.insert(action.line, action.text)
-                this.cursor_line = action.line
-                this.cursor_col = action.col
+
+    fn move_up() {
+        if (this.cursor_row > 0) {
+            this.cursor_row = this.cursor_row - 1;
+            let line_len = len(this.lines[this.cursor_row]);
+            if (this.cursor_col > line_len) {
+                this.cursor_col = line_len;
             }
         }
-        
-        this.redo_stack.push(action)
-        this.modified = true
-        this.clamp_cursor()
     }
-    
-    fn redo(this: *Editor) {
-        if this.redo_stack.is_empty() { return }
-        let action = this.redo_stack.pop()
-        
-        this.clear_selection()
-        
-        match action.type {
-            UndoAction.Type.INSERT => {
-                if action.text == "\n" {
-                    let after = this.lines[this.cursor_line].substr(action.col)
-                    this.lines[this.cursor_line] = this.lines[this.cursor_line].substr(0, action.col)
-                    this.lines.insert(this.cursor_line + 1, after)
-                    this.cursor_line++
-                    this.cursor_col = 0
-                } else {
-                    this.lines[action.line].insert(action.col, action.text)
-                    this.cursor_line = action.line
-                    this.cursor_col = action.col + 1
-                }
-            }
-            UndoAction.Type.DELETE_CHARS => {
-                this.lines[action.line].remove(action.col, action.count)
-                this.cursor_line = action.line
-                this.cursor_col = action.col
-            }
-            UndoAction.Type.DELETE_LINE => {
-                this.lines.remove(action.line)
-                this.clamp_cursor()
+
+    fn move_down() {
+        if (this.cursor_row + 1 < len(this.lines)) {
+            this.cursor_row = this.cursor_row + 1;
+            let line_len = len(this.lines[this.cursor_row]);
+            if (this.cursor_col > line_len) {
+                this.cursor_col = line_len;
             }
         }
-        
-        this.undo_stack.push(action)
-        this.modified = true
-        this.clamp_cursor()
     }
-    
-    // Search
-    fn find_next(this: *Editor, query: string) -> int {
-        if query.is_empty() { return -1 }
-        for i in this.cursor_line..this.lines.len() {
-            let start = if i == this.cursor_line { this.cursor_col + 1 } else { 0 }
-            if let Some(pos) = this.lines[i].find(query, start) {
-                this.cursor_line = i
-                this.cursor_col = pos
-                return i
-            }
-        }
-        // Wrap around
-        for i in 0..=this.cursor_line {
-            if let Some(pos) = this.lines[i].find(query) {
-                this.cursor_line = i
-                this.cursor_col = pos
-                return i
-            }
-        }
-        -1
-    }
-    
-    fn find_prev(this: *Editor, query: string) -> int {
-        if query.is_empty() { return -1 }
-        for i in (0..=this.cursor_line).rev() {
-            let end = if i == this.cursor_line { this.cursor_col } else { this.lines[i].len() }
-            if let Some(pos) = this.lines[i].rfind(query, end) {
-                if i != this.cursor_line || pos < this.cursor_col {
-                    this.cursor_line = i
-                    this.cursor_col = pos
-                    return i
-                }
-            }
-        }
-        // Wrap around
-        for i in (0..this.lines.len()).rev() {
-            if let Some(pos) = this.lines[i].rfind(query) {
-                this.cursor_line = i
-                this.cursor_col = pos
-                return i
-            }
-        }
-        -1
-    }
-    
-    fn replace_current(this: *Editor, replacement: string) {
-        if this.selection.active { this.delete_selection() }
-        this.insert_string(replacement)
-    }
-    
-    fn replace_all(this: *Editor, find: string, replace: string) {
-        if find.is_empty() { return }
-        let mut count = 0
-        for i in 0..this.lines.len() {
-            let mut pos = 0
-            while let Some(pos) = this.lines[i].find(find, pos) {
-                this.lines[i].replace(pos, find.len(), replace)
-                pos += replace.len()
-                count++
-            }
-        }
-        if count > 0 { this.modified = true }
-    }
-    
-    fn clamp_cursor(this: *Editor) {
-        if this.cursor_line < 0 { this.cursor_line = 0 }
-        if this.cursor_line >= this.lines.len() { this.cursor_line = this.lines.len() - 1 }
-        if this.cursor_col < 0 { this.cursor_col = 0 }
-        if this.cursor_col > this.lines[this.cursor_line].len() { this.cursor_col = this.lines[this.cursor_line].len() }
-    }
-    
-    fn ensure_cursor_visible(this: *Editor, view_h: int, view_w: int) {
-        if this.cursor_line < this.scroll_line { this.scroll_line = this.cursor_line }
-        else if this.cursor_line >= this.scroll_line + view_h { this.scroll_line = this.cursor_line - view_h + 1 }
-        if this.cursor_col < this.scroll_col { this.scroll_col = this.cursor_col }
-        else if this.cursor_col >= this.scroll_col + view_w { this.scroll_col = this.cursor_col - view_w + 1 }
-    }
-    
-    // File info
-    fn get_file_name(this: *Editor) -> string {
-        this.filepath.unwrap_or("untitled")
-    }
-    
-    fn get_language(this: *Editor) -> string {
-        if this.filepath.is_none() { return "Forge" }
-        let path = this.filepath.unwrap()
-        let ext = path.split('.').last().unwrap_or("")
-        match ext {
-            "fge" => "Forge",
-            "cpp" | "cc" | "cxx" | "hpp" | "h" => "C++",
-            "c" | "h" => "C",
-            "py" => "Python",
-            "js" | "ts" => "JavaScript/TypeScript",
-            "rs" => "Rust",
-            "go" => "Go",
-            _ => "Text"
+
+    fn move_left() {
+        if (this.cursor_col > 0) {
+            this.cursor_col = this.cursor_col - 1;
+        } else if (this.cursor_row > 0) {
+            this.cursor_row = this.cursor_row - 1;
+            this.cursor_col = len(this.lines[this.cursor_row]);
         }
     }
-    
-    fn new_file(this: *Editor) {
-        this.lines = [""]
-        this.cursor_line = 0
-        this.cursor_col = 0
-        this.scroll_line = 0
-        this.scroll_col = 0
-        this.modified = false
-        this.filepath = nil
-        this.undo_stack = []
-        this.redo_stack = []
-        this.selection = Selection { active: false }
-        this.rebuild_syntax()
+
+    fn move_right() {
+        let line_len = len(this.lines[this.cursor_row]);
+        if (this.cursor_col < line_len) {
+            this.cursor_col = this.cursor_col + 1;
+        } else if (this.cursor_row + 1 < len(this.lines)) {
+            this.cursor_row = this.cursor_row + 1;
+            this.cursor_col = 0;
+        }
     }
-    
-    fn set_filepath(this: *Editor, path: string) {
-        this.filepath = Some(path)
+
+    fn move_home() {
+        this.cursor_col = 0;
     }
-    
-    fn get_filepath(this: *Editor) -> string? { this.filepath }
-    
-    fn is_modified(this: *Editor) -> bool { this.modified }
-    fn set_modified(this: *Editor, m: bool) { this.modified = m }
-    
-    fn get_cursor_line(this: *Editor) -> int { this.cursor_line }
-    fn get_cursor_col(this: *Editor) -> int { this.cursor_col }
-    fn get_line_count(this: *Editor) -> int { this.lines.len() }
-    fn get_scroll_offset(this: *Editor) -> int { this.scroll_line }
-    fn get_line(this: *Editor, idx: int) -> string { this.lines[idx] }
-    fn set_scroll_offset(this: *Editor, s: int) { this.scroll_line = s }
-    
-    fn find_next(this: *Editor, query: string) -> int { -1 }
-    fn find_prev(this: *Editor, query: string) -> int { -1 }
-    fn replace_current(this: *Editor, replacement: string) { this.insert_string(replacement) }
-    fn replace_all(this: *Editor, find: string, replace: string) { /* implementation */ }
-    
-    fn get_selected_text(this: *Editor) -> string { "" }
+
+    fn move_end() {
+        this.cursor_col = len(this.lines[this.cursor_row]);
+    }
+
+    fn page_up(view_height) {
+        let i = 0;
+        while (i < view_height && this.cursor_row > 0) {
+            this.move_up();
+            i = i + 1;
+        }
+    }
+
+    fn page_down(view_height) {
+        let i = 0;
+        while (i < view_height && this.cursor_row + 1 < len(this.lines)) {
+            this.move_down();
+            i = i + 1;
+        }
+    }
+
+    fn get_line(row) {
+        if (row >= 0 && row < len(this.lines)) {
+            return this.lines[row];
+        }
+        return "";
+    }
+
+    fn line_count() {
+        return len(this.lines);
+    }
 }
 
-fn Editor::insert_tab(this: *Editor) {
-    if this.selection.active { this.delete_selection() }
-    this.push_undo(UndoAction { type: UndoAction.Type.INSERT, line: this.cursor_line, col: this.cursor_col, count: 4, text: "    " })
-    this.lines[this.cursor_line].insert(this.cursor_col, "    ")
-    this.cursor_col += 4
-    this.modified = true
+fn join_lines(lines) {
+    let result = "";
+    let i = 0;
+    while (i < len(lines)) {
+        if (i > 0) result = result + "\n";
+        result = result + lines[i];
+        i = i + 1;
+    }
+    return result;
 }
 
-fn Editor::delete_char(this: *Editor) {
-    if this.selection.active { this.delete_selection(); return }
-    if this.cursor_line >= this.lines.len() - 1 && this.cursor_col >= this.lines[this.cursor_line].len() { return }
-
-    if this.cursor_col >= this.lines[this.cursor_line].len() {
-        this.push_undo(UndoAction { type: UndoAction.Type.DELETE_LINE, line: this.cursor_line, col: this.cursor_col, count: 0, text: this.lines[this.cursor_line + 1] })
-        this.lines[this.cursor_line] += this.lines[this.cursor_line + 1]
-        this.lines.remove(this.cursor_line + 1)
-    } else {
-        let deleted = this.lines[this.cursor_line][this.cursor_col]
-        this.push_undo(UndoAction { type: UndoAction.Type.DELETE_CHARS, line: this.cursor_line, col: this.cursor_col, count: 1, text: deleted.to_string() })
-        this.lines[this.cursor_line].remove(this.cursor_col)
+fn remove_at(arr, idx) {
+    let result = [];
+    let i = 0;
+    while (i < len(arr)) {
+        if (i != idx) {
+            push(result, arr[i]);
+        }
+        i = i + 1;
     }
-    this.modified = true
+    return result;
+}
+
+fn insert_at(arr, idx, val) {
+    let result = [];
+    let i = 0;
+    while (i <= len(arr)) {
+        if (i == idx) {
+            push(result, val);
+        }
+        if (i < len(arr)) {
+            push(result, arr[i]);
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+fn push_to_undo(editor) {
+    let state = {
+        "lines": editor.lines,
+        "cursor_row": editor.cursor_row,
+        "cursor_col": editor.cursor_col
+    };
+    push(editor.undo_stack, state);
+    editor.redo_stack = [];
+    if (len(editor.undo_stack) > 200) {
+        editor.undo_stack = remove_at(editor.undo_stack, 0);
+    }
+}
+
+fn undo(editor) {
+    if (len(editor.undo_stack) == 0) return;
+    let current = {
+        "lines": editor.lines,
+        "cursor_row": editor.cursor_row,
+        "cursor_col": editor.cursor_col
+    };
+    push(editor.redo_stack, current);
+    let state = editor.undo_stack[len(editor.undo_stack) - 1];
+    editor.lines = state["lines"];
+    editor.cursor_row = state["cursor_row"];
+    editor.cursor_col = state["cursor_col"];
+    editor.undo_stack = remove_at(editor.undo_stack, len(editor.undo_stack) - 1);
+    editor.modified = true;
+}
+
+fn redo(editor) {
+    if (len(editor.redo_stack) == 0) return;
+    let current = {
+        "lines": editor.lines,
+        "cursor_row": editor.cursor_row,
+        "cursor_col": editor.cursor_col
+    };
+    push(editor.undo_stack, current);
+    let state = editor.redo_stack[len(editor.redo_stack) - 1];
+    editor.lines = state["lines"];
+    editor.cursor_row = state["cursor_row"];
+    editor.cursor_col = state["cursor_col"];
+    editor.redo_stack = remove_at(editor.redo_stack, len(editor.redo_stack) - 1);
+    editor.modified = true;
 }

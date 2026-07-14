@@ -14,6 +14,8 @@
 #include <chrono>
 #include <filesystem>
 #include <iostream>
+#include <dirent.h>
+#include <sys/stat.h>
 #include <cstring>
 
 namespace forge::fvm {
@@ -921,6 +923,45 @@ bool ForgeVM::interpret(std::shared_ptr<GCFunction> function) {
                             if (!handleError("Undefined property '" + name.asString()->value + "'")) return false;
                             break;
                         }
+                    } else if (obj.isArray()) {
+                        std::string mname = name.asString()->value;
+                        GCArray* arr = const_cast<GCArray*>(obj.asArray());
+                        if (mname == "push") {
+                            thread.push(FValue::obj(gc_.newObj<GCNative>([arr](const std::vector<FValue>& a) -> FValue {
+                                for (auto& v : a) arr->elements.push_back(v);
+                                return FValue::nil();
+                            }, "array.push")));
+                        } else if (mname == "pop") {
+                            thread.push(FValue::obj(gc_.newObj<GCNative>([arr](const std::vector<FValue>&) -> FValue {
+                                if (arr->elements.empty()) throw std::runtime_error("pop() on empty array");
+                                FValue val = arr->elements.back();
+                                arr->elements.pop_back();
+                                return val;
+                            }, "array.pop")));
+                        } else if (mname == "len") {
+                            thread.push(FValue::obj(gc_.newObj<GCNative>([arr](const std::vector<FValue>&) -> FValue {
+                                return FValue::integer((long long)arr->elements.size());
+                            }, "array.len")));
+                        } else if (mname == "insert") {
+                            thread.push(FValue::obj(gc_.newObj<GCNative>([arr](const std::vector<FValue>& a) -> FValue {
+                                if (a.size() < 2) throw std::runtime_error("insert() expects (index, value)");
+                                long long idx = a[0].asInteger();
+                                if (idx < 0 || idx > (long long)arr->elements.size()) throw std::runtime_error("insert() index out of bounds");
+                                arr->elements.insert(arr->elements.begin() + idx, a[1]);
+                                return FValue::nil();
+                            }, "array.insert")));
+                        } else if (mname == "remove") {
+                            thread.push(FValue::obj(gc_.newObj<GCNative>([arr](const std::vector<FValue>& a) -> FValue {
+                                if (a.empty()) throw std::runtime_error("remove() expects (index)");
+                                long long idx = a[0].asInteger();
+                                if (idx < 0 || idx >= (long long)arr->elements.size()) throw std::runtime_error("remove() index out of bounds");
+                                arr->elements.erase(arr->elements.begin() + idx);
+                                return FValue::nil();
+                            }, "array.remove")));
+                        } else {
+                            if (!handleError("Undefined array method '" + mname + "'")) return false;
+                            break;
+                        }
                     } else { if (!handleError("Cannot access property on non-object")) return false; break; }
                     break;
                 }
@@ -1380,6 +1421,13 @@ void ForgeVM::defineModules() {
             std::string dest = args.size() > 1 && args[1].isString() ? args[1].asString()->value : "stdout";
             if (dest == "stdout") std::cout << s;
             else if (dest == "stderr") std::cerr << s;
+            else {
+                std::ofstream ofs(dest);
+                if (ofs.is_open()) {
+                    ofs << s;
+                    ofs.close();
+                }
+            }
             return FValue::nil();
         }, "io.write"));
         ioMod->entries["read"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
@@ -1403,6 +1451,26 @@ void ForgeVM::defineModules() {
             int result = std::system(cmd.c_str());
             return FValue::integer((long long)result);
         }, "os.execute"));
+        osMod->entries["capture"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() != 1) throw std::runtime_error("os.capture() expects 1 argument");
+            std::string cmd = args[0].asString()->value;
+            std::string output;
+            FILE* pipe = popen((cmd + " 2>/dev/null").c_str(), "r");
+            if (!pipe) return FValue::nil();
+            char buffer[256];
+            while (fgets(buffer, sizeof(buffer), pipe)) {
+                output += buffer;
+            }
+            pclose(pipe);
+            return FValue::obj(new GCString(output));
+        }, "os.capture"));
+        osMod->entries["args"] = FValue::obj(new GCNative([this](const std::vector<FValue>&) -> FValue {
+            auto* arr = new GCArray();
+            for (int i = 0; i < savedArgc_; i++) {
+                arr->elements.push_back(FValue::obj(new GCString(savedArgv_[i])));
+            }
+            return FValue::obj(arr);
+        }, "os.args"));
         modules_["os"] = FValue::obj(osMod);
     }
     {
@@ -1697,6 +1765,81 @@ void ForgeVM::defineModules() {
         }, "results"));
 
         modules_["test"] = FValue::obj(testMod);
+    }
+    {
+        auto* fsMod = new GCMap();
+
+        fsMod->entries["read_dir"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() != 1) throw std::runtime_error("fs.read_dir() expects 1 argument");
+            std::string path = args[0].asString()->value;
+            auto* arr = new GCArray();
+            DIR* dir = opendir(path.c_str());
+            if (!dir) return FValue::obj(arr);
+            struct dirent* entry;
+            while ((entry = readdir(dir)) != nullptr) {
+                std::string name(entry->d_name);
+                if (name == "." || name == "..") continue;
+                arr->elements.push_back(FValue::obj(new GCString(name)));
+            }
+            closedir(dir);
+            return FValue::obj(arr);
+        }, "fs.read_dir"));
+
+        fsMod->entries["is_dir"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() != 1) throw std::runtime_error("fs.is_dir() expects 1 argument");
+            std::string path = args[0].asString()->value;
+            struct stat st;
+            if (stat(path.c_str(), &st) != 0) return FValue::boolean(false);
+            return FValue::boolean(S_ISDIR(st.st_mode));
+        }, "fs.is_dir"));
+
+        fsMod->entries["exists"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() != 1) throw std::runtime_error("fs.exists() expects 1 argument");
+            std::string path = args[0].asString()->value;
+            struct stat st;
+            return FValue::boolean(stat(path.c_str(), &st) == 0);
+        }, "fs.exists"));
+
+        fsMod->entries["read_file"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() != 1) throw std::runtime_error("fs.read_file() expects 1 argument");
+            std::string path = args[0].asString()->value;
+            std::ifstream file(path);
+            if (!file.is_open()) return FValue::obj(new GCString(""));
+            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            return FValue::obj(new GCString(content));
+        }, "fs.read_file"));
+
+        fsMod->entries["write_file"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() != 2) throw std::runtime_error("fs.write_file() expects 2 arguments");
+            std::string path = args[0].asString()->value;
+            std::string content = args[1].asString()->value;
+            std::ofstream file(path);
+            if (!file.is_open()) return FValue::boolean(false);
+            file << content;
+            file.close();
+            return FValue::boolean(true);
+        }, "fs.write_file"));
+
+        fsMod->entries["remove"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() != 1) throw std::runtime_error("fs.remove() expects 1 argument");
+            std::string path = args[0].asString()->value;
+            return FValue::boolean(std::remove(path.c_str()) == 0);
+        }, "fs.remove"));
+
+        fsMod->entries["rename"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() != 2) throw std::runtime_error("fs.rename() expects 2 arguments");
+            std::string old_path = args[0].asString()->value;
+            std::string new_path = args[1].asString()->value;
+            return FValue::boolean(std::rename(old_path.c_str(), new_path.c_str()) == 0);
+        }, "fs.rename"));
+
+        fsMod->entries["create_dir"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() != 1) throw std::runtime_error("fs.create_dir() expects 1 argument");
+            std::string path = args[0].asString()->value;
+            return FValue::boolean(mkdir(path.c_str(), 0755) == 0);
+        }, "fs.create_dir"));
+
+        modules_["fs"] = FValue::obj(fsMod);
     }
 }
 
