@@ -1,1091 +1,1703 @@
 #include "runtime.hpp"
-#include "classfile.hpp"
+#include "../lexer.hpp"
+#include "../parser.hpp"
+#include "../compiler.hpp"
 #include <fstream>
+#include <cstdlib>
+#include <cstring>
+#include <unistd.h>
+#include <termios.h>
+#include <sys/ioctl.h>
+#include <sys/select.h>
 #include <sstream>
 #include <algorithm>
 #include <chrono>
-#include <dlfcn.h>
 #include <filesystem>
 #include <iostream>
+#include <cstring>
 
 namespace forge::fvm {
 
 // ============================================================
-// ClassLoader Implementation
+// Value <-> FValue Conversion
 // ============================================================
 
-ClassLoader* ClassLoader::bootstrapLoader = nullptr;
-ClassLoader* ClassLoader::systemLoader = nullptr;
-
-ClassRef ClassLoader::loadClass(const std::string& name, bool resolve) {
-    // Check cache first
-    ClassRef cached = findLoadedClass(name);
-    if (cached) return cached;
-    
-    // Delegate to parent first (parent-first delegation)
-    if (parent) {
-        ClassRef parentClass = parent->loadClass(name, false);
-        if (parentClass) {
-            if (resolve) resolveClass(parentClass);
-            return parentClass;
-        }
-    }
-    
-    // Load ourselves
-    ClassRef clazz = loadFromFile(name);
-    if (!clazz) return nullptr;
-    
-    // Cache it
-    {
-        std::lock_guard<std::mutex> lock(classesMutex);
-        loadedClasses[name] = clazz;
-    }
-    
-    if (resolve) resolveClass(clazz);
-    return clazz;
-}
-
-ClassRef ClassLoader::findLoadedClass(const std::string& name) {
-    std::lock_guard<std::mutex> lock(classesMutex);
-    auto it = loadedClasses.find(name);
-    return it != loadedClasses.end() ? it->second : nullptr;
-}
-
-ClassRef ClassLoader::loadFromFile(const std::string& name) {
-    std::string filename = name;
-    std::replace(filename.begin(), filename.end(), '/', '/');
-    filename += ".fclass";
-    
-    for (const auto& path : classpath) {
-        std::filesystem::path fullPath = path + "/" + filename;
-        if (std::filesystem::exists(fullPath)) {
-            std::ifstream file(fullPath, std::ios::binary);
-            if (file) {
-                std::vector<uint8_t> data(
-                    (std::istreambuf_iterator<char>(file)),
-                    std::istreambuf_iterator<char>()
-                );
-                return defineClass(name, data);
-            }
-        }
-    }
-    return nullptr;
-}
-
-ClassRef ClassLoader::defineClass(const std::string& name, const std::vector<uint8_t>& data) {
-    ClassFile cf;
-    if (!cf.load(data)) return nullptr;
-    
-    // Create Class object
-    ClassRef clazz = std::make_shared<Class>(name, this);
-    clazz->accessFlags = cf.accessFlags;
-    clazz->superName = cf.getClassName(cf.superClass);
-    
-    // Load constant pool
-    for (size_t i = 1; i < cf.constantPool.size(); i++) {
-        const auto& cp = cf.constantPool[i];
-        switch (cp.tag) {
-            case CPTag::UTF8:
-                clazz->stringConstants.push_back(cp.getUtf8());
-                break;
-            case CPTag::INTEGER:
-                clazz->intConstants.push_back(cp.getInteger());
-                break;
-            case CPTag::FLOAT:
-                clazz->floatConstants.push_back(cp.getFloat());
-                break;
-            case CPTag::LONG:
-                clazz->longConstants.push_back(cp.getLong());
-                break;
-            case CPTag::DOUBLE:
-                clazz->doubleConstants.push_back(cp.getDouble());
-                break;
-            case CPTag::CLASS:
-                // Will be resolved later
-                break;
-            case CPTag::STRING:
-                // Will be resolved later
-                break;
-        }
-    }
-    
-    // Load fields
-    for (const auto& fi : cf.fields) {
-        FieldRef field = std::make_shared<Field>(fi.accessFlags, 
-            cf.getUtf8(fi.nameIndex), cf.getUtf8(fi.descriptorIndex), clazz);
-        clazz->fields[field->name] = field;
-        clazz->fieldOrder.push_back(field);
-    }
-    clazz->fieldCount = clazz->fieldOrder.size();
-    
-    // Calculate instance size and field offsets
-    size_t offset = 0;
-    for (auto& field : clazz->fieldOrder) {
-        field->offset = offset++;
-        if ((field->accessFlags & AccessFlags::STATIC) != AccessFlags(0)) {
-            // Static field
-            clazz->staticFields.push_back(Value());
-        }
-    }
-    clazz->instanceSize = offset;
-    
-    // Load methods
-    for (const auto& mi : cf.methods) {
-        MethodRef method = std::make_shared<Method>(mi.accessFlags,
-            cf.getUtf8(mi.nameIndex), cf.getUtf8(mi.descriptorIndex), clazz);
-        
-        // Find Code attribute
-        for (const auto& attr : mi.attributes) {
-            if (attr.type == AttributeInfo::Type::CODE) {
-                // Parse code attribute
-                const uint8_t* codeData = attr.data.data();
-                method->maxStack = (codeData[0] << 8) | codeData[1];
-                method->maxLocals = (codeData[2] << 8) | codeData[3];
-                uint32_t codeLen = (codeData[4] << 24) | (codeData[5] << 16) | (codeData[6] << 8) | codeData[7];
-                method->bytecode.assign(codeData + 8, codeData + 8 + codeLen);
-                
-                // Parse exception table
-                uint16_t excCount = (codeData[8 + codeLen] << 8) | codeData[8 + codeLen + 1];
-                size_t excOffset = 8 + codeLen + 2;
-                for (uint16_t i = 0; i < excCount; i++) {
-                    ExceptionHandler eh;
-                    eh.startPc = (codeData[excOffset] << 8) | codeData[excOffset + 1];
-                    eh.endPc = (codeData[excOffset + 2] << 8) | codeData[excOffset + 3];
-                    eh.handlerPc = (codeData[excOffset + 4] << 8) | codeData[excOffset + 5];
-                    eh.catchType = (codeData[excOffset + 6] << 8) | codeData[excOffset + 7];
-                    method->exceptionTable.push_back(eh);
-                    excOffset += 8;
+FValue valueToFValue(const Value& v) {
+    switch (v.type) {
+        case ValueType::VAL_NIL: return FValue::nil();
+        case ValueType::VAL_BOOL: return FValue::boolean(v.as.boolean);
+        case ValueType::VAL_INT: return FValue::integer(v.as.integer);
+        case ValueType::VAL_FLOAT: return FValue::floating(v.as.floating);
+        case ValueType::VAL_OBJ: {
+            if (!v.as.obj) return FValue::nil();
+            Obj* obj = v.as.obj;
+            switch (obj->type) {
+                case ObjType::STRING: {
+                    auto* src = static_cast<ObjString*>(obj);
+                    auto* gcStr = new GCString(src->value);
+                    return FValue::obj(gcStr);
                 }
-                
-                // Parse attributes (LineNumberTable, LocalVariableTable)
-                // ...
-                break;
+                case ObjType::FUNCTION: {
+                    auto* src = static_cast<ObjFunction*>(obj);
+                    auto* gcFunc = new GCFunction();
+                    gcFunc->ownedChunk = std::make_unique<Chunk>();
+                    gcFunc->ownedChunk->code = src->chunk->code;
+                    gcFunc->ownedChunk->constants = src->chunk->constants;
+                    gcFunc->ownedChunk->lines = src->chunk->lines;
+                    gcFunc->ownedChunk->name = src->chunk->name;
+                    gcFunc->chunk = gcFunc->ownedChunk.get();
+                    gcFunc->arity = src->arity;
+                    gcFunc->upvalueCount = src->upvalueCount;
+                    gcFunc->localCount = src->localCount;
+                    gcFunc->name = src->name;
+                    return FValue::obj(gcFunc);
+                }
+                case ObjType::NATIVE: {
+                    auto* src = static_cast<ObjNative*>(obj);
+                    auto* gcNat = new GCNative(
+                        [src](const std::vector<FValue>& args) -> FValue {
+                            std::vector<Value> oldArgs;
+                            for (auto& a : args) {
+                                switch (a.type) {
+                                    case FValueType::VAL_NIL: oldArgs.push_back(Value::nil()); break;
+                                    case FValueType::VAL_BOOL: oldArgs.push_back(Value::boolean(a.as.boolean)); break;
+                                    case FValueType::VAL_INT: oldArgs.push_back(Value::integer(a.as.integer)); break;
+                                    case FValueType::VAL_FLOAT: oldArgs.push_back(Value::floating(a.as.floating)); break;
+                                    case FValueType::VAL_OBJ: {
+                                        if (!a.as.obj) { oldArgs.push_back(Value::nil()); break; }
+                                        switch (a.as.obj->type) {
+                                            case GCObjType::STRING: {
+                                                auto* s = static_cast<GCString*>(a.as.obj);
+                                                oldArgs.push_back(Value::obj(std::make_shared<ObjString>(s->value)));
+                                                break;
+                                            }
+                                            default: oldArgs.push_back(Value::nil()); break;
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                            Value result = src->function(oldArgs);
+                            return valueToFValue(result);
+                        },
+                        src->name
+                    );
+                    gcNat->arity = src->arity;
+                    return FValue::obj(gcNat);
+                }
+                case ObjType::ARRAY: {
+                    auto* src = static_cast<ObjArray*>(obj);
+                    auto* gcArr = new GCArray();
+                    for (auto& elem : src->elements)
+                        gcArr->elements.push_back(valueToFValue(elem));
+                    return FValue::obj(gcArr);
+                }
+                case ObjType::MAP: {
+                    auto* src = static_cast<ObjMap*>(obj);
+                    auto* gcMap = new GCMap();
+                    for (auto& [k, v] : src->entries)
+                        gcMap->entries[k] = valueToFValue(v);
+                    return FValue::obj(gcMap);
+                }
+                case ObjType::CLASS: {
+                    auto* src = static_cast<ObjClass*>(obj);
+                    auto* gcCls = new GCClass(src->name);
+                    if (src->superclass) {
+                        auto superFV = valueToFValue(Value::obj(src->superclass));
+                        gcCls->superclass = superFV.asClass();
+                    }
+                    for (auto& [n, m] : src->methods) {
+                        if (m.closure) {
+                            auto closureFV = valueToFValue(Value::obj(m.closure));
+                            gcCls->methods[n] = {closureFV.asClosure(), m.isStatic};
+                        }
+                    }
+                    return FValue::obj(gcCls);
+                }
+                case ObjType::INSTANCE: {
+                    auto* src = static_cast<ObjInstance*>(obj);
+                    auto* gcInst = new GCInstance(nullptr);
+                    auto classFV = valueToFValue(Value::obj(src->klass));
+                    gcInst->klass = classFV.asClass();
+                    for (auto& [k, v] : src->fields)
+                        gcInst->fields[k] = valueToFValue(v);
+                    return FValue::obj(gcInst);
+                }
+                case ObjType::CLOSURE: {
+                    auto* src = static_cast<ObjClosure*>(obj);
+                    auto fnFV = valueToFValue(Value::obj(src->function));
+                    auto* gcCl = new GCClosure(fnFV.asFunction());
+                    for (size_t i = 0; i < src->upvalues.size() && i < gcCl->upvalues.size(); i++) {
+                        if (src->upvalues[i]) {
+                            auto* gcUv = new GCUpvalue(nullptr);
+                            gcUv->closed = valueToFValue(src->upvalues[i]->closed);
+                            gcUv->location = &gcUv->closed;
+                            gcCl->upvalues[i] = gcUv;
+                        }
+                    }
+                    return FValue::obj(gcCl);
+                }
+                default: return FValue::nil();
             }
         }
-        
-        // Check for native
-        method->isNative = (mi.accessFlags & AccessFlags::NATIVE) != AccessFlags(0);
-        if (method->isNative) {
-            // Will be linked later
-        }
-        
-        clazz->methods[method->name] = method;
-        clazz->methodOrder.push_back(method);
     }
-    
-    // Load attributes (SourceFile, etc.)
-    for (const auto& attr : cf.attributes) {
-        if (attr.type == AttributeInfo::Type::SOURCE_FILE) {
-            clazz->sourceFile = cf.getUtf8((attr.data[0] << 8) | attr.data[1]);
-        }
-    }
-    
-    // Register
-    {
-        std::lock_guard<std::mutex> lock(classesMutex);
-        loadedClasses[name] = clazz;
-    }
-    
-    return clazz;
-}
-
-void ClassLoader::resolveClass(ClassRef clazz) {
-    // Resolve superclass
-    if (!clazz->superName.empty()) {
-        ClassRef super = loadClass(clazz->superName);
-        // Link
-    }
-    
-    // Resolve interfaces
-    for (const auto& iface : clazz->interfaces) {
-        loadClass(iface);
-    }
-    
-    // Resolve field/method references
-    // ...
-}
-
-std::shared_ptr<std::istream> ClassLoader::getResourceAsStream(const std::string& name) {
-    for (const auto& path : classpath) {
-        std::filesystem::path fullPath = path + "/" + name;
-        if (std::filesystem::exists(fullPath)) {
-            return std::make_shared<std::ifstream>(fullPath, std::ios::binary);
-        }
-    }
-    return nullptr;
+    return FValue::nil();
 }
 
 // ============================================================
-// Class Implementation
+// FValue Implementation
 // ============================================================
 
-FieldRef Class::findField(const std::string& name, const std::string& descriptor) {
-    auto it = fields.find(name);
-    if (it != fields.end() && it->second->descriptor == descriptor) {
-        return it->second;
-    }
-    return nullptr;
-}
-
-MethodRef Class::findMethod(const std::string& name, const std::string& descriptor) {
-    auto it = methods.find(name);
-    if (it != methods.end() && it->second->descriptor == descriptor) {
-        return it->second;
-    }
-    return nullptr;
-}
-
-MethodRef Class::findMethod(const std::string& name, const std::string& descriptor, bool includeSuper) {
-    MethodRef m = findMethod(name, descriptor);
-    if (m) return m;
-    
-    if (includeSuper && !superName.empty()) {
-        ClassRef super = loader->loadClass(superName);
-        if (super) return super->findMethod(name, descriptor, true);
-    }
-    return nullptr;
-}
-
-void Class::initialize(ThreadRef thread) {
-    std::unique_lock<std::mutex> lock(initMutex);
-    if (initState == InitState::INITIALIZED) return;
-    if (initState == InitState::IN_PROGRESS) {
-        // Wait for initialization to complete
-        initCV.wait(lock, [this] { return initState != InitState::IN_PROGRESS; });
-        return;
-    }
-    if (initState == InitState::ERROR) {
-        throw std::runtime_error("Class initialization failed: " + name);
-    }
-    
-    initState = InitState::IN_PROGRESS;
-    lock.unlock();
-    
-    try {
-        // Initialize superclass first
-        if (!superName.empty()) {
-            ClassRef super = loader->loadClass(superName);
-            if (super) super->initialize(thread);
-        }
-        
-        // Initialize interfaces
-        for (const auto& iface : interfaces) {
-            ClassRef ifaceClass = loader->loadClass(iface);
-            if (ifaceClass) ifaceClass->initialize(thread);
-        }
-        
-        // Run static initializer <clinit>
-        MethodRef clinit = findMethod("<clinit>", "()V");
-        if (clinit) {
-            thread->pushFrame(std::make_unique<Frame>(clinit, thread, clinit->maxStack, clinit->maxLocals));
-            // Execute frame - would need interpreter
-            // For now, just mark as initialized
-        }
-        
-        std::lock_guard<std::mutex> lock2(initMutex);
-        initState = InitState::INITIALIZED;
-        initCV.notify_all();
-    } catch (...) {
-        std::lock_guard<std::mutex> lock2(initMutex);
-        initState = InitState::ERROR;
-        initCV.notify_all();
-        throw;
-    }
-}
-
-bool Class::isAssignableFrom(ClassRef other) const {
-    if (this == other.get()) return true;
-    if (isInterface()) {
-        // Check if other implements this interface
-        for (const auto& iface : other->interfaces) {
-            if (iface == name) return true;
-            ClassRef ifaceClass = other->loader->loadClass(iface);
-            if (ifaceClass && ifaceClass->isAssignableFrom(shared_from_this())) return true;
-        }
-    } else {
-        // Check inheritance
-        return other->isSubclassOf(shared_from_this());
-    }
-    return false;
-}
-
-bool Class::isSubclassOf(ClassRef other) const {
-    if (!other) return false;
-    if (this == other.get()) return true;
-    if (!superName.empty()) {
-        ClassRef super = loader->loadClass(superName);
-        return super && super->isSubclassOf(other);
-    }
-    return false;
-}
-
-// ============================================================
-// FVM Implementation
-// ============================================================
-
-FVM::FVM() {
-    // Initialize bootstrap and system class loaders
-    if (!ClassLoader::bootstrapLoader) {
-        ClassLoader::bootstrapLoader = new ClassLoader(nullptr);
-        ClassLoader::bootstrapLoader->classpath = {"/usr/lib/forge/classes", "./classes"};
-    }
-    if (!ClassLoader::systemLoader) {
-        ClassLoader::systemLoader = new ClassLoader(ClassLoader::bootstrapLoader);
-        ClassLoader::systemLoader->classpath = {"./classes", "./lib"};
-    }
-}
-
-FVM::~FVM() {
-    shutdown();
-}
-
-bool FVM::startup(const std::vector<std::string>& args) {
-    running = true;
-    
-    // Set system properties
-    systemProperties["forge.version"] = "1.0";
-    systemProperties["forge.home"] = std::filesystem::current_path().string();
-    systemProperties["user.dir"] = std::filesystem::current_path().string();
-    systemProperties["user.name"] = getenv("USER") ? getenv("USER") : "unknown";
-    systemProperties["os.name"] = ui::native::PLATFORM;
-    systemProperties["os.arch"] = "x86_64";
-    
-    // Start GC thread
-    gcThread = std::thread([this]() {
-        while (running) {
-            std::this_thread::sleep_for(std::chrono::seconds(5));
-            gcMinor();
-        }
-    });
-    
-    // Start JIT thread
-    jitThread = std::thread([this]() {
-        while (running) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            // JIT compilation queue
-        }
-    });
-    
-    uiToolkit = std::make_unique<UIToolkit>();
-    
+bool FValue::isTruthy() const {
+    if (type == FValueType::VAL_NIL) return false;
+    if (type == FValueType::VAL_BOOL) return as.boolean;
+    if (type == FValueType::VAL_INT) return as.integer != 0;
+    if (type == FValueType::VAL_FLOAT) return as.floating != 0.0;
     return true;
 }
 
-void FVM::shutdown() {
-    running = false;
-    
-    if (gcThread.joinable()) gcThread.join();
-    if (jitThread.joinable()) jitThread.join();
-    
-    // Shutdown UI
-    ui::native::shutdownPlatformUI();
-    
-    // Terminate all threads
-    {
-        std::lock_guard<std::mutex> lock(threadsMutex);
-        for (auto& t : allThreads) {
-            t->state = Thread::State::TERMINATED;
-            t->unpark();
-        }
-    }
+double FValue::asNumber() const {
+    if (type == FValueType::VAL_INT) return (double)as.integer;
+    if (type == FValueType::VAL_FLOAT) return as.floating;
+    return 0.0;
 }
 
-int FVM::executeMain(ClassRef mainClass, const std::vector<std::string>& args) {
-    // Find main method
-    MethodRef mainMethod = mainClass->findMethod("main", "([Ljava/lang/String;)V");
-    if (!mainMethod) {
-        std::cerr << "Error: Main method not found in " << mainClass->name << std::endl;
-        return 1;
-    }
-    
-    // Create main thread
-    ThreadRef mainThread = createThread("main", mainMethod, {});
-    
-    // Create String array for args
-    ClassRef stringClass = getSystemLoader()->loadClass("java/lang/String");
-    ObjectRef stringArray = newArray(stringClass, args.size());
-    for (size_t i = 0; i < args.size(); i++) {
-        stringArray->arraySet(i, Value(internString(args[i]).get()));
-    }
-    
-    // Push args onto stack
-    mainThread->topFrame()->locals[0] = Value(stringArray.get());
-    
-    // Run
-    while (mainThread->state != Thread::State::TERMINATED) {
-        // Execute bytecode...
-    }
-    
+long long FValue::asInteger() const {
+    if (type == FValueType::VAL_INT) return as.integer;
+    if (type == FValueType::VAL_FLOAT) return (long long)as.floating;
     return 0;
 }
 
-ThreadRef FVM::createThread(const std::string& name, MethodRef entryPoint, const std::vector<Value>& args) {
-    static std::atomic<size_t> threadIdCounter{1};
-    size_t id = threadIdCounter++;
-    
-    ThreadRef thread = std::make_shared<Thread>(id, name);
-    thread->classLoader = ClassLoader::systemLoader;
-    
-    // Push initial frame
-    auto frame = std::make_unique<Frame>(entryPoint, thread, entryPoint->maxStack, entryPoint->maxLocals);
-    for (size_t i = 0; i < args.size(); i++) {
-        frame->locals[i] = args[i];
+bool FValue::isString() const { return type == FValueType::VAL_OBJ && as.obj && as.obj->type == GCObjType::STRING; }
+bool FValue::isFunction() const { return type == FValueType::VAL_OBJ && as.obj && as.obj->type == GCObjType::FUNCTION; }
+bool FValue::isClosure() const { return type == FValueType::VAL_OBJ && as.obj && as.obj->type == GCObjType::CLOSURE; }
+bool FValue::isNative() const { return type == FValueType::VAL_OBJ && as.obj && as.obj->type == GCObjType::NATIVE; }
+bool FValue::isArray() const { return type == FValueType::VAL_OBJ && as.obj && as.obj->type == GCObjType::ARRAY; }
+bool FValue::isMap() const { return type == FValueType::VAL_OBJ && as.obj && as.obj->type == GCObjType::MAP; }
+bool FValue::isClass() const { return type == FValueType::VAL_OBJ && as.obj && as.obj->type == GCObjType::CLASS; }
+bool FValue::isInstance() const { return type == FValueType::VAL_OBJ && as.obj && as.obj->type == GCObjType::INSTANCE; }
+bool FValue::isBoundMethod() const { return type == FValueType::VAL_OBJ && as.obj && as.obj->type == GCObjType::BOUND_METHOD; }
+
+GCString* FValue::asString() const { return isString() ? static_cast<GCString*>(as.obj) : nullptr; }
+GCFunction* FValue::asFunction() const { return isFunction() ? static_cast<GCFunction*>(as.obj) : nullptr; }
+GCClosure* FValue::asClosure() const { return isClosure() ? static_cast<GCClosure*>(as.obj) : nullptr; }
+GCNative* FValue::asNative() const { return isNative() ? static_cast<GCNative*>(as.obj) : nullptr; }
+GCArray* FValue::asArray() const { return isArray() ? static_cast<GCArray*>(as.obj) : nullptr; }
+GCMap* FValue::asMap() const { return isMap() ? static_cast<GCMap*>(as.obj) : nullptr; }
+GCClass* FValue::asClass() const { return isClass() ? static_cast<GCClass*>(as.obj) : nullptr; }
+GCInstance* FValue::asInstance() const { return isInstance() ? static_cast<GCInstance*>(as.obj) : nullptr; }
+GCBoundMethod* FValue::asBoundMethod() const { return isBoundMethod() ? static_cast<GCBoundMethod*>(as.obj) : nullptr; }
+
+std::string FValue::toString() const {
+    switch (type) {
+        case FValueType::VAL_NIL: return "nil";
+        case FValueType::VAL_BOOL: return as.boolean ? "true" : "false";
+        case FValueType::VAL_INT: return std::to_string(as.integer);
+        case FValueType::VAL_FLOAT: {
+            double v = as.floating;
+            if (v == (long long)v && v < 1e15 && v > -1e15) return std::to_string((long long)v);
+            return std::to_string(v);
+        }
+        case FValueType::VAL_OBJ: {
+            if (!as.obj) return "null";
+            switch (as.obj->type) {
+                case GCObjType::STRING: return asString()->value;
+                case GCObjType::FUNCTION: return "<fn " + asFunction()->name + ">";
+                case GCObjType::NATIVE: return "<native " + asNative()->name + ">";
+                case GCObjType::CLOSURE: return "<closure " + asClosure()->function->name + ">";
+                case GCObjType::ARRAY: {
+                    auto* arr = asArray();
+                    std::string result = "[";
+                    for (size_t i = 0; i < arr->elements.size(); i++) {
+                        if (i > 0) result += ", ";
+                        result += arr->elements[i].toString();
+                    }
+                    result += "]";
+                    return result;
+                }
+                case GCObjType::MAP: {
+                    auto* m = asMap();
+                    std::string result = "{";
+                    bool first = true;
+                    for (auto& [k, v] : m->entries) {
+                        if (!first) result += ", ";
+                        result += "\"" + k + "\": " + v.toString();
+                        first = false;
+                    }
+                    result += "}";
+                    return result;
+                }
+                case GCObjType::CLASS: return "<class " + asClass()->name + ">";
+                case GCObjType::INSTANCE: return "<" + asInstance()->klass->name + " instance>";
+                case GCObjType::BOUND_METHOD: return "<bound method " + asBoundMethod()->method->function->name + ">";
+                default: return "<object>";
+            }
+        }
     }
-    thread->pushFrame(std::move(frame));
-    
+    return "<unknown>";
+}
+
+bool FValue::equals(const FValue& other) const {
+    if (type != other.type) {
+        if (isNumber() && other.isNumber()) return asNumber() == other.asNumber();
+        return false;
+    }
+    switch (type) {
+        case FValueType::VAL_NIL: return true;
+        case FValueType::VAL_BOOL: return as.boolean == other.as.boolean;
+        case FValueType::VAL_INT: return as.integer == other.as.integer;
+        case FValueType::VAL_FLOAT: return as.floating == other.as.floating;
+        case FValueType::VAL_OBJ: {
+            if (!as.obj && !other.as.obj) return true;
+            if (!as.obj || !other.as.obj) return false;
+            if (as.obj->type != other.as.obj->type) return false;
+            if (as.obj->type == GCObjType::STRING) return asString()->value == other.asString()->value;
+            return as.obj == other.as.obj;
+        }
+    }
+    return false;
+}
+
+// ============================================================
+// FVMThread Implementation
+// ============================================================
+
+void FVMThread::pushFrame(GCClosure* closure, FValue* slots, int argCount) {
+    if (frameCount >= MAX_FRAMES) {
+        throw std::runtime_error("Stack overflow: too many nested function calls");
+    }
+    FVMFrame frame;
+    frame.closure = closure;
+    frame.ip = closure->function->chunk->code.data();
+    frame.slots = slots;
+    frame.slotCount = closure->function->localCount;
+    if (frameCount < (int)frames.size()) {
+        frames[frameCount] = frame;
+    } else {
+        frames.push_back(frame);
+    }
+    frameCount++;
+}
+
+void FVMThread::popFrame(FValue& result) {
+    frameCount--;
+    if (frameCount > 0) {
+        FVMFrame& caller = frames[frameCount - 1];
+        stackTop = (int)(caller.slots - stack.data()) + 1;
+        caller.slots[0] = result;
+    }
+}
+
+bool FVMThread::callValue(const FValue& callee, int argCount) {
+    if (callee.isClosure()) {
+        GCClosure* closure = callee.asClosure();
+        if (argCount != closure->function->arity) {
+            return false;
+        }
+        FValue* calleeSlots = stack.data() + stackTop - argCount - 1;
+        pushFrame(closure, calleeSlots, argCount);
+        return true;
+    }
+    if (callee.isNative()) {
+        GCNative* native = callee.asNative();
+        std::vector<FValue> args(stack.data() + stackTop - argCount, stack.data() + stackTop);
+        stackTop -= argCount + 1;
+        FValue result = native->function(args);
+        push(result);
+        return true;
+    }
+    if (callee.isClass()) {
+        GCClass* klass = callee.asClass();
+        auto* instance = new GCInstance(klass);
+        stack[stackTop - argCount - 1] = FValue::obj(instance);
+        auto it = klass->methods.find("init");
+        if (it != klass->methods.end()) {
+            GCClosure* initClosure = it->second.closure;
+            if (argCount != initClosure->function->arity) return false;
+            FValue* calleeSlots = stack.data() + stackTop - argCount - 1;
+            pushFrame(initClosure, calleeSlots, argCount);
+        }
+        return true;
+    }
+    if (callee.isBoundMethod()) {
+        GCBoundMethod* bm = callee.asBoundMethod();
+        stack[stackTop - argCount - 1] = bm->receiver;
+        GCClosure* closure = bm->method;
+        if (argCount != closure->function->arity) return false;
+        FValue* calleeSlots = stack.data() + stackTop - argCount - 1;
+        pushFrame(closure, calleeSlots, argCount);
+        return true;
+    }
+    return false;
+}
+
+// ============================================================
+// FVMGC Implementation
+// ============================================================
+
+FVMGC::FVMGC(size_t heapSize) : heapSize_(heapSize), nextGC_(heapSize) {}
+
+GCObject* FVMGC::allocateRaw(size_t size) {
+    if (allocated_ >= nextGC_) {
+        collect();
+    }
+    GCObject* obj = reinterpret_cast<GCObject*>(new uint8_t[size]);
+    allocated_ += size;
+    return obj;
+}
+
+void FVMGC::trackObject(GCObject* obj) {
+    obj->next = objectList_;
+    objectList_ = obj;
+}
+
+void FVMGC::markObject(GCObject* obj) {
+    if (!obj || obj->marked) return;
+    obj->marked = true;
+}
+
+void FVMGC::markValue(const FValue& val) {
+    if (val.type == FValueType::VAL_OBJ && val.as.obj) {
+        markObject(val.as.obj);
+    }
+}
+
+void FVMGC::markRoots() {
     {
-        std::lock_guard<std::mutex> lock(threadsMutex);
-        allThreads.push_back(thread);
-    }
-    
-    thread->state = Thread::State::RUNNABLE;
-    thread->nativeThread = std::thread([this, thread]() {
-        // Thread entry point
-        while (thread->state != Thread::State::TERMINATED) {
-            // Execute bytecode
-            executeThread(thread);
-        }
-    });
-    
-    return thread;
-}
-
-ThreadRef FVM::currentThread() {
-    static thread_local ThreadRef current;
-    return current;
-}
-
-ObjectRef FVM::newObject(ClassRef clazz) {
-    // Ensure class is initialized
-    // ...
-    
-    ObjectRef obj = std::make_shared<Object>(clazz);
-    // Initialize fields to default values
-    for (auto& field : obj->fields) {
-        field = Value(); // zero/null
-    }
-    return obj;
-}
-
-ObjectRef FVM::newArray(ClassRef elementType, size_t length) {
-    std::string arrayName = "[" + elementType->name;
-    ClassRef arrayClass = getSystemLoader()->loadClass(arrayName);
-    if (!arrayClass) {
-        // Create array class
-        arrayClass = std::make_shared<Class>(arrayName, getSystemLoader());
-        arrayClass->accessFlags = AccessFlags::PUBLIC | AccessFlags::FINAL;
-        arrayClass->isArray = true;
-        arrayClass->fieldCount = 1; // length field
-        getSystemLoader()->loadedClasses[arrayName] = arrayClass;
-    }
-    
-    ObjectRef arr = std::make_shared<Object>(arrayClass);
-    arr->fields.resize(length + 1); // +1 for length
-    arr->fields[0] = Value(static_cast<int32_t>(length)); // length at index 0
-    return arr;
-}
-
-ObjectRef FVM::newMultiArray(ClassRef clazz, const std::vector<size_t>& dimensions) {
-    if (dimensions.empty()) return nullptr;
-    if (dimensions.size() == 1) {
-        return newArray(clazz, dimensions[0]);
-    }
-    
-    ClassRef elementType = clazz;
-    // Recursively create nested arrays
-    // ...
-    return nullptr;
-}
-
-ObjectRef FVM::boxInt(int32_t v) {
-    ClassRef integerClass = getSystemLoader()->loadClass("java/lang/Integer");
-    ObjectRef obj = newObject(integerClass);
-    obj->fields[0] = Value(v); // value field
-    return obj;
-}
-
-ObjectRef FVM::boxLong(int64_t v) {
-    ClassRef longClass = getSystemLoader()->loadClass("java/lang/Long");
-    ObjectRef obj = newObject(longClass);
-    obj->fields[0] = Value(v);
-    return obj;
-}
-
-ObjectRef FVM::boxFloat(float v) {
-    ClassRef floatClass = getSystemLoader()->loadClass("java/lang/Float");
-    ObjectRef obj = newObject(floatClass);
-    obj->fields[0] = Value(v);
-    return obj;
-}
-
-ObjectRef FVM::boxDouble(double v) {
-    ClassRef doubleClass = getSystemLoader()->loadClass("java/lang/Double");
-    ObjectRef obj = newObject(doubleClass);
-    obj->fields[0] = Value(v);
-    return obj;
-}
-
-ObjectRef FVM::boxBoolean(bool v) {
-    ClassRef boolClass = getSystemLoader()->loadClass("java/lang/Boolean");
-    ObjectRef obj = newObject(boolClass);
-    obj->fields[0] = Value(v ? 1 : 0);
-    return obj;
-}
-
-ObjectRef FVM::boxChar(uint16_t v) {
-    ClassRef charClass = getSystemLoader()->loadClass("java/lang/Character");
-    ObjectRef obj = newObject(charClass);
-    obj->fields[0] = Value(static_cast<int32_t>(v));
-    return obj;
-}
-
-ObjectRef FVM::internString(const std::string& str) {
-    static std::unordered_map<std::string, ObjectRef> stringPool;
-    static std::mutex poolMutex;
-    
-    std::lock_guard<std::mutex> lock(poolMutex);
-    auto it = stringPool.find(str);
-    if (it != stringPool.end()) return it->second;
-    
-    ClassRef stringClass = getSystemLoader()->loadClass("java/lang/String");
-    ObjectRef obj = newObject(stringClass);
-    // Store string data in object
-    // For simplicity, store in a field
-    // In real JVM, String would have a char[] field
-    stringPool[str] = obj;
-    return obj;
-}
-
-FVM::Stats FVM::getStats() const {
-    Stats s;
-    s.classesLoaded = 0;
-    for (auto& loader : {ClassLoader::bootstrapLoader, ClassLoader::systemLoader}) {
-        if (loader) {
-            std::lock_guard<std::mutex> lock(loader->classesMutex);
-            s.classesLoaded += loader->loadedClasses.size();
+        std::lock_guard<std::mutex> lock(threadsMutex_);
+        for (FVMThread* thread : threads_) {
+            for (int i = 0; i < thread->stackTop; i++) {
+                markValue(thread->stack[i]);
+            }
+            for (int i = 0; i < thread->frameCount; i++) {
+                FVMFrame& frame = thread->frames[i];
+                markObject(reinterpret_cast<GCObject*>(frame.closure));
+            }
         }
     }
-    return s;
 }
 
-// ============================================================
-// Thread Implementation
-// ============================================================
-
-void Thread::pushFrame(std::unique_ptr<Frame> frame) {
-    if (currentFrame) {
-        frame->caller = currentFrame;
-    }
-    currentFrame = frame.get();
-    frames.push_back(std::move(frame));
-}
-
-void Thread::popFrame() {
-    if (!frames.empty()) {
-        frames.pop_back();
-        currentFrame = frames.empty() ? nullptr : frames.back().get();
-    }
-}
-
-std::string Thread::getStackTrace() const {
-    std::ostringstream oss;
-    oss << "Thread: " << name << " (id=" << threadId << ")\n";
-    for (auto it = frames.rbegin(); it != frames.rend(); ++it) {
-        const Frame* f = it->get();
-        oss << "  at " << f->method->declaringClass->name 
-            << "." << f->method->name 
-            << f->method->descriptor 
-            << " (line " << f->getLineNumber() << ")\n";
-    }
-    return oss.str();
-}
-
-void Thread::park() {
-    std::unique_lock<std::mutex> lock(parkMutex);
-    parked = true;
-    // parkCV.wait(lock, [this] { return !parked; });
-}
-
-void Thread::unpark() {
-    std::lock_guard<std::mutex> lock(parkMutex);
-    parked = false;
-    // parkCV.notify_one();
-}
-
-// ============================================================
-// Interpreter (Bytecode Execution)
-// ============================================================
-
-void FVM::executeThread(ThreadRef thread) {
-    while (thread->state != Thread::State::TERMINATED && thread->currentFrame) {
-        Frame* frame = thread->currentFrame;
-        if (frame->pc >= frame->method->bytecode.size()) {
-            // Frame complete
-            thread->popFrame();
-            continue;
+void FVMGC::traceReferences() {
+    GCObject* current = objectList_;
+    while (current) {
+        if (!current->marked) { current = current->next; continue; }
+        switch (current->type) {
+            case GCObjType::CLOSURE: {
+                auto* cl = current->as<GCClosure>();
+                markObject(cl->function);
+                for (auto* uv : cl->upvalues) markObject(uv);
+                break;
+            }
+            case GCObjType::ARRAY: {
+                for (auto& v : current->as<GCArray>()->elements) markValue(v);
+                break;
+            }
+            case GCObjType::MAP: {
+                for (auto& [k, v] : current->as<GCMap>()->entries) markValue(v);
+                break;
+            }
+            case GCObjType::CLASS: {
+                auto* klass = current->as<GCClass>();
+                for (auto& [name, method] : klass->methods) {
+                    if (method.closure) markObject(method.closure);
+                }
+                if (klass->superclass) markObject(klass->superclass);
+                break;
+            }
+            case GCObjType::INSTANCE: {
+                auto* inst = current->as<GCInstance>();
+                markObject(inst->klass);
+                for (auto& [k, v] : inst->fields) markValue(v);
+                break;
+            }
+            case GCObjType::BOUND_METHOD: {
+                auto* bm = current->as<GCBoundMethod>();
+                markValue(bm->receiver);
+                if (bm->method) markObject(bm->method);
+                break;
+            }
+            case GCObjType::FUNCTION: {
+                break;
+            }
+            case GCObjType::UPVALUE: {
+                auto* uv = current->as<GCUpvalue>();
+                markValue(uv->closed);
+                break;
+            }
+            default: break;
         }
-        
-        Opcode opcode = static_cast<Opcode>(frame->method->bytecode[frame->pc++]);
-        
+        current = current->next;
+    }
+}
+
+void FVMGC::sweep() {
+    GCObject** prev = &objectList_;
+    GCObject* current = objectList_;
+    while (current) {
+        if (!current->marked) {
+            GCObject* next = current->next;
+            freeObject(current);
+            *prev = next;
+            current = next;
+        } else {
+            current->marked = false;
+            prev = &current->next;
+            current = current->next;
+        }
+    }
+}
+
+void FVMGC::freeObject(GCObject* obj) {
+    switch (obj->type) {
+        case GCObjType::STRING: obj->as<GCString>()->~GCString(); break;
+        case GCObjType::FUNCTION: obj->as<GCFunction>()->~GCFunction(); break;
+        case GCObjType::NATIVE: obj->as<GCNative>()->~GCNative(); break;
+        case GCObjType::CLOSURE: obj->as<GCClosure>()->~GCClosure(); break;
+        case GCObjType::UPVALUE: obj->as<GCUpvalue>()->~GCUpvalue(); break;
+        case GCObjType::ARRAY: obj->as<GCArray>()->~GCArray(); break;
+        case GCObjType::MAP: obj->as<GCMap>()->~GCMap(); break;
+        case GCObjType::CLASS: obj->as<GCClass>()->~GCClass(); break;
+        case GCObjType::INSTANCE: obj->as<GCInstance>()->~GCInstance(); break;
+        case GCObjType::BOUND_METHOD: obj->as<GCBoundMethod>()->~GCBoundMethod(); break;
+    }
+    delete[] reinterpret_cast<uint8_t*>(obj);
+}
+
+void FVMGC::collect() {
+    markRoots();
+    traceReferences();
+    sweep();
+    nextGC_ = allocated_ * 2;
+    if (nextGC_ < heapSize_) nextGC_ = heapSize_;
+}
+
+void FVMGC::registerThread(FVMThread* thread) {
+    std::lock_guard<std::mutex> lock(threadsMutex_);
+    threads_.push_back(thread);
+}
+
+void FVMGC::unregisterThread(FVMThread* thread) {
+    std::lock_guard<std::mutex> lock(threadsMutex_);
+    threads_.erase(std::remove(threads_.begin(), threads_.end(), thread), threads_.end());
+}
+
+// ============================================================
+// ForgeVM Implementation
+// ============================================================
+
+ForgeVM::ForgeVM() : gc_(), mainThread_() {
+    mainThread_.threadId = 0;
+    mainThread_.name = "main";
+    mainThread_.state = FVMThread::State::RUNNABLE;
+    mainThread_.stack.resize(FVMThread::STACK_SIZE);
+    gc_.registerThread(&mainThread_);
+    currentThread_ = &mainThread_;
+    defineBuiltins();
+    defineModules();
+}
+
+ForgeVM::~ForgeVM() {
+    gc_.unregisterThread(&mainThread_);
+}
+
+void ForgeVM::reset() {
+    mainThread_.stackTop = 0;
+    mainThread_.frameCount = 0;
+    tryFrames_.clear();
+    openUpvalues_ = nullptr;
+}
+
+void ForgeVM::runtimeError(const std::string& msg) {
+    std::cerr << "Runtime Error: " << msg;
+    for (int i = mainThread_.frameCount - 1; i >= 0; i--) {
+        FVMFrame& f = mainThread_.frames[i];
+        if (!f.closure || !f.closure->function) continue;
+        auto& fn = f.closure->function;
+        std::cerr << "\n  " << (i == mainThread_.frameCount - 1 ? "in " : "  called from ");
+        std::cerr << fn->name;
+        if (f.ip && fn->chunk) {
+            int offset = (int)(f.ip - fn->chunk->code.data()) - 1;
+            if (offset >= 0 && offset < (int)fn->chunk->code.size()) {
+                std::cerr << " (line " << fn->chunk->lineAt(offset) << ")";
+            }
+        }
+    }
+    std::cerr << "\n";
+}
+
+bool ForgeVM::handleError(const std::string& msg) {
+    if (!tryFrames_.empty()) {
+        auto tf = tryFrames_.back();
+        tryFrames_.pop_back();
+        auto& thread = mainThread_;
+        thread.frameCount = tf.frameCount;
+        thread.stackTop = tf.stackSize;
+        FVMFrame& cf = thread.currentFrame();
+        cf.ip = cf.closure->function->chunk->code.data() + tf.handlerOffset;
+        FValue err;
+        err.type = FValueType::VAL_OBJ;
+        auto* errStr = gc_.newObj<GCString>(msg);
+        err.as.obj = errStr;
+        thread.push(err);
+        return true;
+    }
+    runtimeError(msg);
+    return false;
+}
+
+GCUpvalue* ForgeVM::captureUpvalue(FValue* slot) {
+    GCUpvalue* prev = nullptr;
+    GCUpvalue* curr = openUpvalues_;
+    while (curr && curr->location > slot) {
+        prev = curr;
+        curr = curr->next;
+    }
+    if (curr && curr->location == slot) return curr;
+    auto* uv = gc_.newObj<GCUpvalue>(slot);
+    uv->next = curr;
+    if (prev) prev->next = uv;
+    else openUpvalues_ = uv;
+    return uv;
+}
+
+void ForgeVM::closeUpvalues(FValue* last) {
+    while (openUpvalues_ && openUpvalues_->location >= last) {
+        openUpvalues_->closed = *openUpvalues_->location;
+        openUpvalues_->location = &openUpvalues_->closed;
+        openUpvalues_ = openUpvalues_->next;
+    }
+}
+
+bool ForgeVM::interpret(std::shared_ptr<GCFunction> function) {
+    reset();
+
+    auto* closure = gc_.newObj<GCClosure>(function.get());
+    mainThread_.push(FValue::obj(closure));
+    mainThread_.pushFrame(closure, mainThread_.stack.data(), 0);
+
+    FVMThread& thread = mainThread_;
+    FVMFrame* framePtr = &thread.currentFrame();
+
+    #define FVM_READ_BYTE() (*framePtr->ip++)
+    #define FVM_READ_UINT16() (framePtr->ip += 2, (uint16_t)((framePtr->ip[-2] << 8) | framePtr->ip[-1]))
+    #define FVM_READ_CONSTANT() (valueToFValue(framePtr->closure->function->chunk->constants[FVM_READ_UINT16()]))
+
+    while (thread.hasFrames()) {
+        framePtr = &thread.currentFrame();
+
         try {
-            executeOpcode(thread, frame, opcode);
+            uint8_t instruction = FVM_READ_BYTE();
+            switch (instruction) {
+                case OP_CONSTANT: { thread.push(FVM_READ_CONSTANT()); break; }
+                case OP_NIL: thread.push(FValue::nil()); break;
+                case OP_TRUE: thread.push(FValue::boolean(true)); break;
+                case OP_FALSE: thread.push(FValue::boolean(false)); break;
+                case OP_POP: thread.pop(); break;
+                case OP_DUP: thread.push(thread.peek()); break;
+
+                case OP_DEFINE_GLOBAL: {
+                    FValue name = FVM_READ_CONSTANT();
+                    globals_[name.asString()->value] = thread.peek();
+                    thread.pop();
+                    break;
+                }
+                case OP_GET_GLOBAL: {
+                    FValue name = FVM_READ_CONSTANT();
+                    auto it = globals_.find(name.asString()->value);
+                    if (it == globals_.end()) {
+                        if (!handleError("Undefined variable '" + name.asString()->value + "'")) return false;
+                        break;
+                    }
+                    thread.push(it->second);
+                    break;
+                }
+                case OP_SET_GLOBAL: {
+                    FValue name = FVM_READ_CONSTANT();
+                    if (globals_.find(name.asString()->value) == globals_.end()) {
+                        if (!handleError("Undefined variable '" + name.asString()->value + "'")) return false;
+                        break;
+                    }
+                    globals_[name.asString()->value] = thread.peek();
+                    break;
+                }
+                case OP_GET_LOCAL: {
+                    uint16_t slot = FVM_READ_UINT16();
+                    thread.push(framePtr->slots[slot]);
+                    break;
+                }
+                case OP_SET_LOCAL: {
+                    uint16_t slot = FVM_READ_UINT16();
+                    framePtr->slots[slot] = thread.peek();
+                    break;
+                }
+                case OP_GET_UPVALUE: {
+                    uint8_t idx = FVM_READ_BYTE();
+                    thread.push(*framePtr->closure->upvalues[idx]->location);
+                    break;
+                }
+                case OP_SET_UPVALUE: {
+                    uint8_t idx = FVM_READ_BYTE();
+                    *framePtr->closure->upvalues[idx]->location = thread.peek();
+                    break;
+                }
+                case OP_CLOSE_UPVALUE: {
+                    uint16_t slot = FVM_READ_UINT16();
+                    closeUpvalues(framePtr->slots + slot);
+                    break;
+                }
+
+                case OP_ADD: {
+                    FValue b = thread.pop(); FValue a = thread.pop();
+                    if (a.isNumber() && b.isNumber()) {
+                        if (a.type == FValueType::VAL_INT && b.type == FValueType::VAL_INT)
+                            thread.push(FValue::integer(a.as.integer + b.as.integer));
+                        else thread.push(FValue::floating(a.asNumber() + b.asNumber()));
+                    } else if (a.isString() && b.isString()) {
+                        auto* s = gc_.newObj<GCString>(a.asString()->value + b.asString()->value);
+                        thread.push(FValue::obj(s));
+                    } else {
+                        if (!handleError("Invalid operands for '+'")) return false;
+                        break;
+                    }
+                    break;
+                }
+                case OP_SUBTRACT: {
+                    FValue b = thread.pop(); FValue a = thread.pop();
+                    if (a.isNumber() && b.isNumber()) {
+                        if (a.type == FValueType::VAL_INT && b.type == FValueType::VAL_INT)
+                            thread.push(FValue::integer(a.as.integer - b.as.integer));
+                        else thread.push(FValue::floating(a.asNumber() - b.asNumber()));
+                    } else { if (!handleError("Invalid operands for '-'")) return false; break; }
+                    break;
+                }
+                case OP_MULTIPLY: {
+                    FValue b = thread.pop(); FValue a = thread.pop();
+                    if (a.isNumber() && b.isNumber()) {
+                        if (a.type == FValueType::VAL_INT && b.type == FValueType::VAL_INT)
+                            thread.push(FValue::integer(a.as.integer * b.as.integer));
+                        else thread.push(FValue::floating(a.asNumber() * b.asNumber()));
+                    } else { if (!handleError("Invalid operands for '*'")) return false; break; }
+                    break;
+                }
+                case OP_DIVIDE: {
+                    FValue b = thread.pop(); FValue a = thread.pop();
+                    if (a.isNumber() && b.isNumber()) {
+                        if (b.asNumber() == 0) { if (!handleError("Division by zero")) return false; break; }
+                        if (a.type == FValueType::VAL_INT && b.type == FValueType::VAL_INT)
+                            thread.push(FValue::integer(a.as.integer / b.as.integer));
+                        else thread.push(FValue::floating(a.asNumber() / b.asNumber()));
+                    } else { if (!handleError("Invalid operands for '/'")) return false; break; }
+                    break;
+                }
+                case OP_MODULO: {
+                    FValue b = thread.pop(); FValue a = thread.pop();
+                    if (a.isNumber() && b.isNumber()) {
+                        if (b.asNumber() == 0) { if (!handleError("Division by zero")) return false; break; }
+                        if (a.type == FValueType::VAL_INT && b.type == FValueType::VAL_INT)
+                            thread.push(FValue::integer(a.as.integer % b.as.integer));
+                        else thread.push(FValue::floating(std::fmod(a.asNumber(), b.asNumber())));
+                    } else { if (!handleError("Invalid operands for '%'")) return false; break; }
+                    break;
+                }
+                case OP_BITWISE_AND: {
+                    FValue b = thread.pop(); FValue a = thread.pop();
+                    if (a.isNumber() && b.isNumber()) {
+                        if (a.type == FValueType::VAL_INT && b.type == FValueType::VAL_INT)
+                            thread.push(FValue::integer(a.as.integer & b.as.integer));
+                        else { if (!handleError("Bitwise AND requires integer operands")) return false; break; }
+                    } else { if (!handleError("Invalid operands for '&'")) return false; break; }
+                    break;
+                }
+                case OP_BITWISE_OR: {
+                    FValue b = thread.pop(); FValue a = thread.pop();
+                    if (a.isNumber() && b.isNumber()) {
+                        if (a.type == FValueType::VAL_INT && b.type == FValueType::VAL_INT)
+                            thread.push(FValue::integer(a.as.integer | b.as.integer));
+                        else { if (!handleError("Bitwise OR requires integer operands")) return false; break; }
+                    } else { if (!handleError("Invalid operands for '|'")) return false; break; }
+                    break;
+                }
+                case OP_BITWISE_XOR: {
+                    FValue b = thread.pop(); FValue a = thread.pop();
+                    if (a.isNumber() && b.isNumber()) {
+                        if (a.type == FValueType::VAL_INT && b.type == FValueType::VAL_INT)
+                            thread.push(FValue::integer(a.as.integer ^ b.as.integer));
+                        else { if (!handleError("Bitwise XOR requires integer operands")) return false; break; }
+                    } else { if (!handleError("Invalid operands for '^'")) return false; break; }
+                    break;
+                }
+                case OP_NEGATE: {
+                    FValue a = thread.pop();
+                    if (a.isNumber()) {
+                        if (a.type == FValueType::VAL_INT) thread.push(FValue::integer(-a.as.integer));
+                        else thread.push(FValue::floating(-a.as.floating));
+                    } else { if (!handleError("Cannot negate non-number")) return false; break; }
+                    break;
+                }
+                case OP_NOT: thread.push(FValue::boolean(!thread.pop().isTruthy())); break;
+                case OP_EQUAL: { FValue b = thread.pop(); FValue a = thread.pop(); thread.push(FValue::boolean(a.equals(b))); break; }
+                case OP_NOT_EQUAL: { FValue b = thread.pop(); FValue a = thread.pop(); thread.push(FValue::boolean(!a.equals(b))); break; }
+                case OP_LESS: {
+                    FValue b = thread.pop(); FValue a = thread.pop();
+                    if (a.isNumber() && b.isNumber()) thread.push(FValue::boolean(a.asNumber() < b.asNumber()));
+                    else if (a.isString() && b.isString()) thread.push(FValue::boolean(a.asString()->value < b.asString()->value));
+                    else { if (!handleError("Invalid comparison")) return false; break; }
+                    break;
+                }
+                case OP_LESS_EQUAL: {
+                    FValue b = thread.pop(); FValue a = thread.pop();
+                    if (a.isNumber() && b.isNumber()) thread.push(FValue::boolean(a.asNumber() <= b.asNumber()));
+                    else if (a.isString() && b.isString()) thread.push(FValue::boolean(a.asString()->value <= b.asString()->value));
+                    else { if (!handleError("Invalid comparison")) return false; break; }
+                    break;
+                }
+                case OP_GREATER: {
+                    FValue b = thread.pop(); FValue a = thread.pop();
+                    if (a.isNumber() && b.isNumber()) thread.push(FValue::boolean(a.asNumber() > b.asNumber()));
+                    else if (a.isString() && b.isString()) thread.push(FValue::boolean(a.asString()->value > b.asString()->value));
+                    else { if (!handleError("Invalid comparison")) return false; break; }
+                    break;
+                }
+                case OP_GREATER_EQUAL: {
+                    FValue b = thread.pop(); FValue a = thread.pop();
+                    if (a.isNumber() && b.isNumber()) thread.push(FValue::boolean(a.asNumber() >= b.asNumber()));
+                    else if (a.isString() && b.isString()) thread.push(FValue::boolean(a.asString()->value >= b.asString()->value));
+                    else { if (!handleError("Invalid comparison")) return false; break; }
+                    break;
+                }
+
+                case OP_JUMP: { uint16_t offset = FVM_READ_UINT16(); framePtr->ip += offset; break; }
+                case OP_JUMP_IF_FALSE: { uint16_t offset = FVM_READ_UINT16(); if (!thread.peek().isTruthy()) framePtr->ip += offset; break; }
+                case OP_JUMP_IF_TRUE: { uint16_t offset = FVM_READ_UINT16(); if (thread.peek().isTruthy()) framePtr->ip += offset; break; }
+                case OP_LOOP: { uint16_t offset = FVM_READ_UINT16(); framePtr->ip -= offset; break; }
+
+                case OP_CALL: {
+                    uint8_t argCount = FVM_READ_BYTE();
+                    FValue callee = thread.peek(argCount);
+                    if (!thread.callValue(callee, argCount)) {
+                        if (!handleError("Cannot call " + callee.toString())) return false;
+                    } else {
+                        framePtr = &thread.currentFrame();
+                    }
+                    break;
+                }
+                case OP_RETURN: {
+                    FValue result = thread.pop();
+                    FValue* returningSlots = framePtr->slots;
+                    closeUpvalues(returningSlots);
+                    thread.frameCount--;
+                    if (thread.frameCount == 0) {
+                        thread.push(result);
+                        return true;
+                    }
+                    thread.stackTop = (int)(returningSlots - thread.stack.data());
+                    thread.push(result);
+                    framePtr = &thread.currentFrame();
+                    break;
+                }
+
+                case OP_CLOSURE: {
+                    FValue fnVal = FVM_READ_CONSTANT();
+                    GCFunction* fn = fnVal.asFunction();
+                    auto* cl = gc_.newObj<GCClosure>(fn);
+                    for (int i = 0; i < fn->upvalueCount; i++) {
+                        uint8_t isLocal = FVM_READ_BYTE();
+                        uint8_t idx = FVM_READ_BYTE();
+                        if (isLocal) {
+                            cl->upvalues[i] = captureUpvalue(framePtr->slots + idx);
+                        } else {
+                            cl->upvalues[i] = framePtr->closure->upvalues[idx];
+                        }
+                    }
+                    thread.push(FValue::obj(cl));
+                    break;
+                }
+
+                case OP_PRINT: {
+                    FValue val = thread.pop();
+                    if (val.type != FValueType::VAL_NIL) std::cout << val.toString() << "\n";
+                    break;
+                }
+
+                case OP_ARRAY: {
+                    uint16_t count = FVM_READ_UINT16();
+                    auto* arr = gc_.newObj<GCArray>();
+                    for (int i = count - 1; i >= 0; i--) arr->elements.push_back(thread.peek(i));
+                    for (int i = 0; i < count; i++) thread.pop();
+                    thread.push(FValue::obj(arr));
+                    break;
+                }
+                case OP_MAP: {
+                    uint16_t count = FVM_READ_UINT16();
+                    auto* map = gc_.newObj<GCMap>();
+                    for (int i = 0; i < count; i++) {
+                        FValue key = thread.peek(2 * i + 1);
+                        FValue val = thread.peek(2 * i);
+                        if (!key.isString()) {
+                            if (!handleError("Map key must be a string")) return false;
+                            break;
+                        }
+                        map->entries[key.asString()->value] = val;
+                    }
+                    for (int i = 0; i < count * 2; i++) thread.pop();
+                    thread.push(FValue::obj(map));
+                    break;
+                }
+                case OP_INDEX: {
+                    FValue idx = thread.pop(); FValue obj = thread.pop();
+                    if (obj.isArray()) {
+                        long long i = idx.asInteger();
+                        long long len = (long long)obj.asArray()->elements.size();
+                        if (i < 0 || i >= len) { if (!handleError("Array index out of bounds")) return false; break; }
+                        thread.push(obj.asArray()->elements[i]);
+                    } else if (obj.isString()) {
+                        long long i = idx.asInteger();
+                        long long len = (long long)obj.asString()->value.size();
+                        if (i < 0 || i >= len) { if (!handleError("String index out of bounds")) return false; break; }
+                        auto* s = gc_.newObj<GCString>(std::string(1, obj.asString()->value[i]));
+                        thread.push(FValue::obj(s));
+                    } else if (obj.isMap()) {
+                        if (!idx.isString()) { if (!handleError("Map key must be a string")) return false; break; }
+                        auto it = obj.asMap()->entries.find(idx.asString()->value);
+                        if (it == obj.asMap()->entries.end()) thread.push(FValue::nil());
+                        else thread.push(it->second);
+                    } else { if (!handleError("Cannot index into non-indexable value")) return false; break; }
+                    break;
+                }
+                case OP_SET_INDEX: {
+                    FValue val = thread.pop(); FValue idx = thread.pop(); FValue obj = thread.pop();
+                    if (obj.isArray()) {
+                        long long i = idx.asInteger();
+                        long long len = (long long)obj.asArray()->elements.size();
+                        if (i < 0 || i >= len) { if (!handleError("Array index out of bounds")) return false; break; }
+                        obj.asArray()->elements[i] = val;
+                        thread.push(val);
+                    } else if (obj.isMap()) {
+                        if (!idx.isString()) { if (!handleError("Map key must be a string")) return false; break; }
+                        obj.asMap()->entries[idx.asString()->value] = val;
+                        thread.push(val);
+                    } else { if (!handleError("Cannot set index on non-indexable value")) return false; break; }
+                    break;
+                }
+                case OP_INDEX_LEN: {
+                    FValue obj = thread.pop();
+                    if (obj.isArray()) thread.push(FValue::integer((long long)obj.asArray()->elements.size()));
+                    else if (obj.isString()) thread.push(FValue::integer((long long)obj.asString()->value.size()));
+                    else if (obj.isMap()) thread.push(FValue::integer((long long)obj.asMap()->entries.size()));
+                    else { if (!handleError("Cannot get length of non-indexable value")) return false; break; }
+                    break;
+                }
+
+                case OP_GET_PROPERTY: {
+                    FValue name = FVM_READ_CONSTANT();
+                    FValue obj = thread.pop();
+                    if (obj.isInstance()) {
+                        auto* inst = obj.asInstance();
+                        auto it = inst->fields.find(name.asString()->value);
+                        if (it != inst->fields.end()) { thread.push(it->second); }
+                        else {
+                            auto mit = inst->klass->methods.find(name.asString()->value);
+                            if (mit != inst->klass->methods.end()) {
+                                auto* bm = gc_.newObj<GCBoundMethod>(obj, mit->second.closure);
+                                thread.push(FValue::obj(bm));
+                            } else {
+                                if (!handleError("Undefined property '" + name.asString()->value + "'")) return false;
+                                break;
+                            }
+                        }
+                    } else if (obj.isClass()) {
+                        auto mit = obj.asClass()->methods.find(name.asString()->value);
+                        if (mit != obj.asClass()->methods.end()) {
+                            auto* bm = gc_.newObj<GCBoundMethod>(obj, mit->second.closure);
+                            thread.push(FValue::obj(bm));
+                        } else {
+                            if (!handleError("Undefined method '" + name.asString()->value + "'")) return false;
+                            break;
+                        }
+                    } else if (obj.isMap()) {
+                        auto it = obj.asMap()->entries.find(name.asString()->value);
+                        if (it != obj.asMap()->entries.end()) { thread.push(it->second); }
+                        else {
+                            if (!handleError("Undefined property '" + name.asString()->value + "'")) return false;
+                            break;
+                        }
+                    } else { if (!handleError("Cannot access property on non-object")) return false; break; }
+                    break;
+                }
+                case OP_SET_PROPERTY: {
+                    FValue name = FVM_READ_CONSTANT();
+                    FValue val = thread.pop();
+                    FValue obj = thread.pop();
+                    if (!obj.isInstance()) { if (!handleError("Cannot set property on non-instance")) return false; break; }
+                    obj.asInstance()->fields[name.asString()->value] = val;
+                    thread.push(val);
+                    break;
+                }
+
+                case OP_CLASS: {
+                    FValue name = FVM_READ_CONSTANT();
+                    auto* klass = gc_.newObj<GCClass>(name.asString()->value);
+                    thread.push(FValue::obj(klass));
+                    break;
+                }
+                case OP_METHOD: {
+                    FValue name = FVM_READ_CONSTANT();
+                    FValue methodVal = thread.peek();
+                    FValue classVal = thread.peek(1);
+                    if (!classVal.isClass()) { if (!handleError("Expected class for method")) return false; break; }
+                    GCClosure* cl = methodVal.asClosure();
+                    classVal.asClass()->methods[name.asString()->value] = {cl, false};
+                    thread.pop();
+                    break;
+                }
+                case OP_INHERIT: {
+                    FValue superclass = thread.peek();
+                    FValue subclass = thread.peek(1);
+                    if (!superclass.isClass()) { if (!handleError("Superclass must be a class")) return false; break; }
+                    subclass.asClass()->superclass = superclass.asClass();
+                    for (auto& [n, m] : superclass.asClass()->methods) {
+                        if (subclass.asClass()->methods.find(n) == subclass.asClass()->methods.end())
+                            subclass.asClass()->methods[n] = m;
+                    }
+                    thread.pop();
+                    break;
+                }
+                case OP_GET_SUPER: {
+                    FValue name = FVM_READ_CONSTANT();
+                    FValue instance = thread.pop();
+                    if (!instance.isInstance()) { if (!handleError("Expected instance")) return false; break; }
+                    GCClass* sup = instance.asInstance()->klass->superclass;
+                    if (!sup) { if (!handleError("No superclass")) return false; break; }
+                    auto it = sup->methods.find(name.asString()->value);
+                    if (it == sup->methods.end()) { if (!handleError("Undefined method '" + name.asString()->value + "'")) return false; break; }
+                    auto* bm = gc_.newObj<GCBoundMethod>(instance, it->second.closure);
+                    thread.push(FValue::obj(bm));
+                    break;
+                }
+
+                case OP_THROW: {
+                    FValue val = thread.pop();
+                    if (!tryFrames_.empty()) {
+                        auto tf = tryFrames_.back();
+                        tryFrames_.pop_back();
+                        thread.frameCount = tf.frameCount;
+                        thread.stackTop = tf.stackSize;
+                        FVMFrame& cf = thread.currentFrame();
+                        cf.ip = cf.closure->function->chunk->code.data() + tf.handlerOffset;
+                        thread.push(val);
+                    } else {
+                        if (!handleError("Uncaught exception: " + val.toString())) return false;
+                        break;
+                    }
+                    break;
+                }
+                case OP_TRY: {
+                    uint16_t offset = FVM_READ_UINT16();
+                    FVMFrame& cf = thread.currentFrame();
+                    int currentOffset = (int)(cf.ip - cf.closure->function->chunk->code.data());
+                    tryFrames_.push_back({thread.stackTop, thread.frameCount, currentOffset + offset});
+                    break;
+                }
+                case OP_END_TRY: {
+                    if (!tryFrames_.empty()) tryFrames_.pop_back();
+                    break;
+                }
+
+                case OP_IMPORT: {
+                    FValue name = FVM_READ_CONSTANT();
+                    uint8_t paramCount = FVM_READ_BYTE();
+                    (void)paramCount;
+                    uint8_t libIdx = FVM_READ_BYTE();
+                    (void)libIdx;
+                    std::string modName = name.asString()->value;
+                    auto it = modules_.find(modName);
+                    if (it != modules_.end()) {
+                        globals_[modName] = it->second;
+                        thread.push(it->second);
+                    } else {
+                        auto* native = gc_.newObj<GCNative>(
+                            [modName](const std::vector<FValue>&) -> FValue {
+                                throw std::runtime_error("module '" + modName + "' not found");
+                            }, modName);
+                        globals_[modName] = FValue::obj(native);
+                        thread.push(globals_[modName]);
+                    }
+                    break;
+                }
+
+                case OP_YIELD: { break; }
+                case OP_NEXT: { break; }
+                case OP_CREATE_GENERATOR: { break; }
+                case OP_EOF: return true;
+
+                default:
+                    if (!handleError("Unknown instruction: " + std::to_string(instruction))) return false;
+                    break;
+            }
         } catch (const std::exception& e) {
-            // Handle exception
-            thread->pendingException = std::make_shared<Object>(
-                getSystemLoader()->loadClass("java/lang/RuntimeException")
-            );
-            // Unwind stack looking for catch block
+            if (!handleError(e.what())) return false;
         }
     }
+    return true;
+
+    #undef FVM_READ_BYTE
+    #undef FVM_READ_UINT16
+    #undef FVM_READ_CONSTANT
 }
 
-void FVM::executeOpcode(ThreadRef thread, Frame* frame, Opcode opcode) {
-    switch (opcode) {
-        // Constants
-        case Opcode::NOP: break;
-        case Opcode::ACONST_NULL: frame->push(Value(nullptr)); break;
-        case Opcode::ICONST_M1: frame->push(Value(-1)); break;
-        case Opcode::ICONST_0: frame->push(Value(0)); break;
-        case Opcode::ICONST_1: frame->push(Value(1)); break;
-        case Opcode::ICONST_2: frame->push(Value(2)); break;
-        case Opcode::ICONST_3: frame->push(Value(3)); break;
-        case Opcode::ICONST_4: frame->push(Value(4)); break;
-        case Opcode::ICONST_5: frame->push(Value(5)); break;
-        case Opcode::LCONST_0: frame->push(Value(int64_t(0))); break;
-        case Opcode::LCONST_1: frame->push(Value(int64_t(1))); break;
-        case Opcode::FCONST_0: frame->push(Value(0.0f)); break;
-        case Opcode::FCONST_1: frame->push(Value(1.0f)); break;
-        case Opcode::FCONST_2: frame->push(Value(2.0f)); break;
-        case Opcode::DCONST_0: frame->push(Value(0.0)); break;
-        case Opcode::DCONST_1: frame->push(Value(1.0)); break;
-        case Opcode::BIPUSH: {
-            int8_t val = static_cast<int8_t>(frame->nextByte());
-            frame->push(Value(static_cast<int32_t>(val)));
-            break;
+bool ForgeVM::interpretSource(const std::string& source, const std::string& filename) {
+    try {
+        Lexer lexer(source);
+        auto tokens = lexer.tokenize();
+        Parser parser(tokens);
+        auto program = parser.parse();
+        Compiler compiler;
+        auto fn = compiler.compile(program);
+        if (compiler.hasError()) {
+            std::cerr << "Compile Error: " << compiler.errorMessage() << "\n";
+            return false;
         }
-        case Opcode::SIPUSH: {
-            int16_t val = static_cast<int16_t>(frame->nextShort());
-            frame->push(Value(static_cast<int32_t>(val)));
-            break;
-        }
-        case Opcode::LDC: {
-            uint8_t index = frame->nextByte();
-            // Load from constant pool
-            break;
-        }
-        case Opcode::LDC_W: {
-            uint16_t index = frame->nextShort();
-            break;
-        }
-        case Opcode::LDC2_W: {
-            uint16_t index = frame->nextShort();
-            break;
-        }
-        
-        // Load/Store
-        case Opcode::ILOAD: {
-            uint8_t idx = frame->nextByte();
-            frame->push(frame->local(idx));
-            break;
-        }
-        case Opcode::ILOAD_0: frame->push(frame->local(0)); break;
-        case Opcode::ILOAD_1: frame->push(frame->local(1)); break;
-        case Opcode::ILOAD_2: frame->push(frame->local(2)); break;
-        case Opcode::ILOAD_3: frame->push(frame->local(3)); break;
-        case Opcode::ISTORE: {
-            uint8_t idx = frame->nextByte();
-            frame->local(idx) = frame->pop();
-            break;
-        }
-        case Opcode::ISTORE_0: frame->local(0) = frame->pop(); break;
-        case Opcode::ISTORE_1: frame->local(1) = frame->pop(); break;
-        case Opcode::ISTORE_2: frame->local(2) = frame->pop(); break;
-        case Opcode::ISTORE_3: frame->local(3) = frame->pop(); break;
-        
-        // Stack
-        case Opcode::POP: frame->pop(); break;
-        case Opcode::POP2: frame->pop(); frame->pop(); break;
-        case Opcode::DUP: {
-            Value v = frame->top();
-            frame->push(v);
-            break;
-        }
-        case Opcode::SWAP: {
-            Value v1 = frame->pop();
-            Value v2 = frame->pop();
-            frame->push(v1);
-            frame->push(v2);
-            break;
-        }
-        
-        // Arithmetic
-        case Opcode::IADD: {
-            int32_t v2 = frame->pop().intVal;
-            int32_t v1 = frame->pop().intVal;
-            frame->push(Value(v1 + v2));
-            break;
-        }
-        case Opcode::ISUB: {
-            int32_t v2 = frame->pop().intVal;
-            int32_t v1 = frame->pop().intVal;
-            frame->push(Value(v1 - v2));
-            break;
-        }
-        case Opcode::IMUL: {
-            int32_t v2 = frame->pop().intVal;
-            int32_t v1 = frame->pop().intVal;
-            frame->push(Value(v1 * v2));
-            break;
-        }
-        case Opcode::IDIV: {
-            int32_t v2 = frame->pop().intVal;
-            int32_t v1 = frame->pop().intVal;
-            if (v2 == 0) throw std::runtime_error("Division by zero");
-            frame->push(Value(v1 / v2));
-            break;
-        }
-        case Opcode::IREM: {
-            int32_t v2 = frame->pop().intVal;
-            int32_t v1 = frame->pop().intVal;
-            frame->push(Value(v1 % v2));
-            break;
-        }
-        case Opcode::INEG: {
-            int32_t v = frame->pop().intVal;
-            frame->push(Value(-v));
-            break;
-        }
-        case Opcode::ISHL: {
-            int32_t v2 = frame->pop().intVal;
-            int32_t v1 = frame->pop().intVal;
-            frame->push(Value(v1 << (v2 & 0x1F)));
-            break;
-        }
-        case Opcode::ISHR: {
-            int32_t v2 = frame->pop().intVal;
-            int32_t v1 = frame->pop().intVal;
-            frame->push(Value(v1 >> (v2 & 0x1F)));
-            break;
-        }
-        case Opcode::IUSHR: {
-            int32_t v2 = frame->pop().intVal;
-            int32_t v1 = frame->pop().intVal;
-            frame->push(Value(static_cast<uint32_t>(v1) >> (v2 & 0x1F)));
-            break;
-        }
-        case Opcode::IAND: {
-            int32_t v2 = frame->pop().intVal;
-            int32_t v1 = frame->pop().intVal;
-            frame->push(Value(v1 & v2));
-            break;
-        }
-        case Opcode::IOR: {
-            int32_t v2 = frame->pop().intVal;
-            int32_t v1 = frame->pop().intVal;
-            frame->push(Value(v1 | v2));
-            break;
-        }
-        case Opcode::IXOR: {
-            int32_t v2 = frame->pop().intVal;
-            int32_t v1 = frame->pop().intVal;
-            frame->push(Value(v1 ^ v2));
-            break;
-        }
-        case Opcode::IINC: {
-            uint8_t idx = frame->nextByte();
-            int32_t const_val = static_cast<int8_t>(frame->nextByte());
-            frame->local(idx).intVal += const_val;
-            break;
-        }
-        case Opcode::I2L: frame->push(Value(static_cast<int64_t>(frame->pop().intVal))); break;
-        case Opcode::I2F: frame->push(Value(static_cast<float>(frame->pop().intVal))); break;
-        case Opcode::I2D: frame->push(Value(static_cast<double>(frame->pop().intVal))); break;
-        case Opcode::L2I: frame->push(Value(static_cast<int32_t>(frame->pop().longVal))); break;
-        case Opcode::F2I: frame->push(Value(static_cast<int32_t>(frame->pop().floatVal))); break;
-        case Opcode::D2I: frame->push(Value(static_cast<int32_t>(frame->pop().doubleVal))); break;
-        
-        // Comparison
-        case Opcode::LCMP: {
-            int64_t v2 = frame->pop().longVal;
-            int64_t v1 = frame->pop().longVal;
-            frame->push(Value(v1 < v2 ? -1 : (v1 > v2 ? 1 : 0)));
-            break;
-        }
-        case Opcode::FCMPL:
-        case Opcode::FCMPG: {
-            float v2 = frame->pop().floatVal;
-            float v1 = frame->pop().floatVal;
-            int cmp = (v1 < v2) ? -1 : (v1 > v2 ? 1 : (v1 == v2 ? 0 : (opcode == Opcode::FCMPL ? -1 : 1)));
-            frame->push(Value(cmp));
-            break;
-        }
-        
-        // Control flow
-        case Opcode::IFEQ: {
-            int32_t v = frame->pop().intVal;
-            int16_t offset = static_cast<int16_t>(frame->nextShort());
-            if (v == 0) frame->pc = frame->pc - 3 + offset;
-            break;
-        }
-        case Opcode::IFNE: {
-            int32_t v = frame->pop().intVal;
-            int16_t offset = static_cast<int16_t>(frame->nextShort());
-            if (v != 0) frame->pc = frame->pc - 3 + offset;
-            break;
-        }
-        case Opcode::IFLT: {
-            int32_t v = frame->pop().intVal;
-            int16_t offset = static_cast<int16_t>(frame->nextShort());
-            if (v < 0) frame->pc = frame->pc - 3 + offset;
-            break;
-        }
-        case Opcode::IFGE: {
-            int32_t v = frame->pop().intVal;
-            int16_t offset = static_cast<int16_t>(frame->nextShort());
-            if (v >= 0) frame->pc = frame->pc - 3 + offset;
-            break;
-        }
-        case Opcode::IFGT: {
-            int32_t v = frame->pop().intVal;
-            int16_t offset = static_cast<int16_t>(frame->nextShort());
-            if (v > 0) frame->pc = frame->pc - 3 + offset;
-            break;
-        }
-        case Opcode::IFLE: {
-            int32_t v = frame->pop().intVal;
-            int16_t offset = static_cast<int16_t>(frame->nextShort());
-            if (v <= 0) frame->pc = frame->pc - 3 + offset;
-            break;
-        }
-        case Opcode::IF_ICMPEQ: {
-            int32_t v2 = frame->pop().intVal;
-            int32_t v1 = frame->pop().intVal;
-            int16_t offset = static_cast<int16_t>(frame->nextShort());
-            if (v1 == v2) frame->pc = frame->pc - 3 + offset;
-            break;
-        }
-        case Opcode::IF_ICMPNE: {
-            int32_t v2 = frame->pop().intVal;
-            int32_t v1 = frame->pop().intVal;
-            int16_t offset = static_cast<int16_t>(frame->nextShort());
-            if (v1 != v2) frame->pc = frame->pc - 3 + offset;
-            break;
-        }
-        case Opcode::GOTO: {
-            int16_t offset = static_cast<int16_t>(frame->nextShort());
-            frame->pc = frame->pc - 3 + offset;
-            break;
-        }
-        
-        // Method invocation
-        case Opcode::INVOKEVIRTUAL:
-        case Opcode::INVOKESPECIAL:
-        case Opcode::INVOKESTATIC:
-        case Opcode::INVOKEINTERFACE: {
-            uint16_t index = frame->nextShort();
-            // Resolve method reference and invoke
-            // ...
-            break;
-        }
-        case Opcode::INVOKEDYNAMIC: {
-            uint16_t index = frame->nextShort();
-            frame->pc += 2; // Skip extra bytes
-            break;
-        }
-        
-        // Return
-        case Opcode::IRETURN: {
-            Value result = frame->pop();
-            thread->popFrame();
-            if (thread->currentFrame) {
-                thread->currentFrame->push(result);
-            }
-            break;
-        }
-        case Opcode::RETURN: {
-            thread->popFrame();
-            break;
-        }
-        
-        // Object operations
-        case Opcode::NEW: {
-            uint16_t index = frame->nextShort();
-            // Create new object
-            ClassRef clazz = frame->method->declaringClass->getClassLoader()->loadClass(
-                frame->method->declaringClass->stringConstants[index]
-            );
-            ObjectRef obj = std::make_shared<Object>(clazz);
-            // Initialize fields to default values
-            for (auto& field : obj->fields) {
-                field = Value(); // zero/null
-            }
-            frame->push(Value(obj.get()));
-            break;
-        }
-        case Opcode::NEWARRAY: {
-            uint8_t atype = frame->nextByte();
-            int32_t count = frame->pop().intVal;
-            // Create primitive array
-            ClassRef arrayClass = frame->method->declaringClass->getClassLoader()->loadClass("[" + getArrayTypeChar(atype));
-            ObjectRef arr = std::make_shared<Object>(frame->method->declaringClass->getClassLoader()->loadClass("[" + getArrayTypeChar(atype)));
-            arr->fields.resize(count + 1);
-            arr->fields[0] = Value(static_cast<int32_t>(count)); // length
-            frame->push(Value(arr.get()));
-            break;
-        }
-        case Opcode::ANEWARRAY: {
-            uint16_t index = frame->nextShort();
-            int32_t count = frame->pop().intVal;
-            // Create array of references
-            break;
-        }
-        case Opcode::ARRAYLENGTH: {
-            Value v = frame->pop();
-            // ObjectRef arr = std::dynamic_pointer_cast<Object>(v.refVal);
-            // frame->push(Value(static_cast<int32_t>(arr->arrayLength())));
-            frame->push(Value(0)); // placeholder
-            break;
-        }
-        case Opcode::CHECKCAST: {
-            uint16_t index = frame->nextShort();
-            // Type check
-            break;
-        }
-        case Opcode::INSTANCEOF: {
-            uint16_t index = frame->nextShort();
-            frame->pop(); // pop object ref
-            frame->push(Value(0)); // or 1
-            break;
-        }
-        
-        // Field access
-        case Opcode::GETFIELD: {
-            uint16_t index = frame->nextShort();
-            Value objRef = frame->pop();
-            if (!objRef.isObject()) {
-                throw std::runtime_error("GETFIELD: expected object reference");
-            }
-            ObjectRef obj = std::dynamic_pointer_cast<Object>(objRef.refVal);
-            if (!obj) throw std::runtime_error("GETFIELD: not an object");
-            // Get field index from constant pool
-            uint16_t fieldIndex = frame->method->declaringClass->getFieldIndex(index);
-            if (fieldIndex >= objRef->fields.size()) {
-                throw std::runtime_error("Invalid field index");
-            }
-            frame->push(obj->fields[fieldIndex]);
-            break;
-        }
-        case Opcode::PUTFIELD: {
-            uint16_t index = frame->nextShort();
-            Value val = frame->pop();
-            Value objRef = frame->pop();
-            if (!objRef.isObject()) throw std::runtime_error("PUTFIELD: expected object reference");
-            ObjectRef obj = std::dynamic_pointer_cast<Object>(objRef.refVal);
-            // Get field index from constant pool
-            uint16_t fieldIndex = frame->method->declaringClass->getFieldIndex(index);
-            if (fieldIndex >= objRef->fields.size()) {
-                throw std::runtime_error("Invalid field index");
-            }
-            obj->fields[fieldIndex] = val;
-            break;
-        }
-        case Opcode::GETSTATIC: {
-            uint16_t index = frame->nextShort();
-            // Get static field from class
-            // For now, push a default value
-            frame->push(Value());
-            break;
-        }
-        case Opcode::PUTSTATIC: {
-            uint16_t index = frame->nextShort();
-            Value val = frame->pop();
-            // Set static field
-            break;
-        }
-        
-        // Monitor
-        case Opcode::MONITORENTER: {
-            frame->pop(); // pop object ref
-            // obj->monitorEnter(thread);
-            break;
-        }
-        case Opcode::MONITOREXIT: {
-            frame->pop(); // pop object ref
-            // obj->monitorExit(thread);
-            break;
-        }
-        
-        // Throw
-        case Opcode::ATHROW: {
-            frame->pop(); // pop exception object
-            // thread->pendingException = exception;
-            break;
-        }
-        
-        // Forge extensions
-        case Opcode::FORGE_INVOKE_NATIVE: {
-            uint16_t index = frame->nextShort();
-            // Call native function
-            break;
-        }
-        case Opcode::FORGE_YIELD: {
-            // Generator yield
-            break;
-        }
-        case Opcode::FORGE_AWAIT: {
-            // Async await
-            break;
-        }
-        case Opcode::FORGE_TRY: {
-            // Try block start
-            break;
-        }
-        case Opcode::FORGE_CATCH: {
-            // Catch handler
-            break;
-        }
-        case Opcode::FORGE_MATCH: {
-            // Pattern matching
-            break;
-        }
-        
-        default:
-            std::cerr << "Unimplemented opcode: 0x" << std::hex << static_cast<int>(opcode) << std::endl;
-            throw std::runtime_error("Unimplemented opcode");
+
+        auto* gcFunc = gc_.newObj<GCFunction>();
+        gcFunc->ownedChunk = std::make_unique<Chunk>();
+        gcFunc->ownedChunk->code = std::move(fn->chunk->code);
+        gcFunc->ownedChunk->constants = std::move(fn->chunk->constants);
+        gcFunc->ownedChunk->lines = std::move(fn->chunk->lines);
+        gcFunc->ownedChunk->name = fn->chunk->name;
+        gcFunc->chunk = gcFunc->ownedChunk.get();
+        gcFunc->arity = fn->arity;
+        gcFunc->upvalueCount = fn->upvalueCount;
+        gcFunc->localCount = fn->localCount;
+        gcFunc->name = fn->name;
+
+        auto sharedFn = std::shared_ptr<GCFunction>(gcFunc, [](GCFunction*){});
+        return interpret(sharedFn);
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << "\n";
+        return false;
     }
 }
 
 // ============================================================
-// Garbage Collection
+// Native Methods & Builtins
 // ============================================================
 
-void FVM::gc() {
-    // Mark-and-sweep
-    // 1. Mark roots (thread stacks, static fields, JNI globals)
-    // 2. Trace object graph
-    // 3. Sweep unreachable objects
+void ForgeVM::defineNative(const std::string& name, GCNative::NativeFn fn, int arity) {
+    auto* native = gc_.newObj<GCNative>(std::move(fn), name);
+    native->arity = arity;
+    globals_[name] = FValue::obj(native);
 }
 
-void FVM::gcMinor() {
-    // Generational young generation collection
+void ForgeVM::defineModule(const std::string& name, GCMap* module) {
+    modules_[name] = FValue::obj(module);
 }
 
-void FVM::gcMajor() {
-    // Full heap collection
+void ForgeVM::defineBuiltins() {
+    defineNative("print", [](const std::vector<FValue>& args) -> FValue {
+        for (size_t i = 0; i < args.size(); i++) {
+            if (i > 0) std::cout << " ";
+            std::cout << args[i].toString();
+        }
+        std::cout << "\n";
+        return FValue::nil();
+    });
+
+    defineNative("len", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1) throw std::runtime_error("len() expects 1 argument");
+        if (args[0].isString()) return FValue::integer((long long)args[0].asString()->value.size());
+        if (args[0].isArray()) return FValue::integer((long long)args[0].asArray()->elements.size());
+        if (args[0].isMap()) return FValue::integer((long long)args[0].asMap()->entries.size());
+        throw std::runtime_error("len() expects string, array, or map");
+    });
+
+    defineNative("push", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 2) throw std::runtime_error("push() expects 2 arguments");
+        if (!args[0].isArray()) throw std::runtime_error("push() expects array");
+        const_cast<GCArray*>(args[0].asArray())->elements.push_back(args[1]);
+        return args[0];
+    });
+
+    defineNative("str", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1) throw std::runtime_error("str() expects 1 argument");
+        auto* s = new GCString(args[0].toString());
+        return FValue::obj(s);
+    });
+
+    defineNative("int", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1) throw std::runtime_error("int() expects 1 argument");
+        return FValue::integer(args[0].asInteger());
+    });
+
+    defineNative("float", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1) throw std::runtime_error("float() expects 1 argument");
+        return FValue::floating(args[0].asNumber());
+    });
+
+    defineNative("type", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1) throw std::runtime_error("type() expects 1 argument");
+        std::string t;
+        switch (args[0].type) {
+            case FValueType::VAL_NIL: t = "nil"; break;
+            case FValueType::VAL_BOOL: t = "bool"; break;
+            case FValueType::VAL_INT: t = "int"; break;
+            case FValueType::VAL_FLOAT: t = "float"; break;
+            case FValueType::VAL_OBJ:
+                if (args[0].isString()) t = "string";
+                else if (args[0].isArray()) t = "array";
+                else if (args[0].isMap()) t = "map";
+                else if (args[0].isClass()) t = "class";
+                else if (args[0].isInstance()) t = "instance";
+                else t = "object";
+                break;
+        }
+        auto* s = new GCString(t);
+        return FValue::obj(s);
+    });
+
+    defineNative("error", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1) throw std::runtime_error("error() expects 1 argument");
+        throw std::runtime_error(args[0].toString());
+    });
+
+    defineNative("keys", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1) throw std::runtime_error("keys() expects 1 argument");
+        if (!args[0].isMap()) throw std::runtime_error("keys() expects a map");
+        auto* arr = new GCArray();
+        for (auto& [k, v] : args[0].asMap()->entries) {
+            arr->elements.push_back(FValue::obj(new GCString(k)));
+        }
+        return FValue::obj(arr);
+    });
+
+    defineNative("values", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1) throw std::runtime_error("values() expects 1 argument");
+        if (!args[0].isMap()) throw std::runtime_error("values() expects a map");
+        auto* arr = new GCArray();
+        for (auto& [k, v] : args[0].asMap()->entries)
+            arr->elements.push_back(v);
+        return FValue::obj(arr);
+    });
+
+    defineNative("has", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 2) throw std::runtime_error("has() expects 2 arguments");
+        if (!args[0].isMap()) throw std::runtime_error("has() expects a map");
+        if (!args[1].isString()) throw std::runtime_error("has() expects a string key");
+        return FValue::boolean(args[0].asMap()->entries.find(args[1].asString()->value) != args[0].asMap()->entries.end());
+    });
+
+    defineNative("entries", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1) throw std::runtime_error("entries() expects 1 argument");
+        if (!args[0].isMap()) throw std::runtime_error("entries() expects a map");
+        auto* arr = new GCArray();
+        for (auto& [k, v] : args[0].asMap()->entries) {
+            auto* pair = new GCArray();
+            pair->elements.push_back(FValue::obj(new GCString(k)));
+            pair->elements.push_back(v);
+            arr->elements.push_back(FValue::obj(pair));
+        }
+        return FValue::obj(arr);
+    });
+
+    defineNative("clone", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1) throw std::runtime_error("clone() expects 1 argument");
+        if (args[0].isMap()) {
+            auto* m = new GCMap();
+            m->entries = args[0].asMap()->entries;
+            return FValue::obj(m);
+        }
+        if (args[0].isArray()) {
+            auto* a = new GCArray();
+            a->elements = args[0].asArray()->elements;
+            return FValue::obj(a);
+        }
+        throw std::runtime_error("clone() expects map or array");
+    });
+
+    defineNative("upper", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1 || !args[0].isString()) throw std::runtime_error("upper() expects 1 string argument");
+        std::string s = args[0].asString()->value;
+        for (auto& c : s) c = std::toupper(c);
+        return FValue::obj(new GCString(s));
+    });
+
+    defineNative("lower", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1 || !args[0].isString()) throw std::runtime_error("lower() expects 1 string argument");
+        std::string s = args[0].asString()->value;
+        for (auto& c : s) c = std::tolower(c);
+        return FValue::obj(new GCString(s));
+    });
+
+    defineNative("trim", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1 || !args[0].isString()) throw std::runtime_error("trim() expects 1 string argument");
+        std::string s = args[0].asString()->value;
+        size_t start = s.find_first_not_of(" \t\n\r");
+        if (start == std::string::npos) return FValue::obj(new GCString(""));
+        size_t end = s.find_last_not_of(" \t\n\r");
+        return FValue::obj(new GCString(s.substr(start, end - start + 1)));
+    });
+
+    defineNative("split", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 2) throw std::runtime_error("split() expects 2 arguments");
+        if (!args[0].isString() || !args[1].isString()) throw std::runtime_error("split() expects 2 strings");
+        std::string s = args[0].asString()->value;
+        std::string delim = args[1].asString()->value;
+        auto* arr = new GCArray();
+        if (delim.empty()) {
+            for (char c : s) arr->elements.push_back(FValue::obj(new GCString(std::string(1, c))));
+        } else {
+            size_t pos = 0;
+            while ((pos = s.find(delim)) != std::string::npos) {
+                arr->elements.push_back(FValue::obj(new GCString(s.substr(0, pos))));
+                s.erase(0, pos + delim.size());
+            }
+            arr->elements.push_back(FValue::obj(new GCString(s)));
+        }
+        return FValue::obj(arr);
+    });
+
+    defineNative("contains", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 2) throw std::runtime_error("contains() expects 2 arguments");
+        if (!args[0].isString() || !args[1].isString()) throw std::runtime_error("contains() expects 2 strings");
+        return FValue::boolean(args[0].asString()->value.find(args[1].asString()->value) != std::string::npos);
+    });
+
+    defineNative("replace", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 3) throw std::runtime_error("replace() expects 3 arguments");
+        if (!args[0].isString() || !args[1].isString() || !args[2].isString())
+            throw std::runtime_error("replace() expects 3 strings");
+        std::string s = args[0].asString()->value;
+        std::string old = args[1].asString()->value;
+        std::string repl = args[2].asString()->value;
+        size_t pos = 0;
+        while ((pos = s.find(old, pos)) != std::string::npos) {
+            s.replace(pos, old.size(), repl);
+            pos += repl.size();
+        }
+        return FValue::obj(new GCString(s));
+    });
+
+    defineNative("substring", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() < 2 || args.size() > 3) throw std::runtime_error("substring() expects 2 or 3 arguments");
+        if (!args[0].isString()) throw std::runtime_error("substring() expects a string");
+        std::string s = args[0].asString()->value;
+        long long start = args[1].asInteger();
+        long long end = (args.size() == 3) ? args[2].asInteger() : (long long)s.size();
+        if (start < 0) start = 0;
+        if (end > (long long)s.size()) end = s.size();
+        if (start > end) start = end;
+        return FValue::obj(new GCString(s.substr(start, end - start)));
+    });
+
+    defineNative("charAt", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 2) throw std::runtime_error("charAt() expects 2 arguments");
+        if (!args[0].isString()) throw std::runtime_error("charAt() expects a string");
+        long long i = args[1].asInteger();
+        std::string s = args[0].asString()->value;
+        if (i < 0 || i >= (long long)s.size()) throw std::runtime_error("charAt() index out of bounds");
+        return FValue::obj(new GCString(std::string(1, s[i])));
+    });
+
+    defineNative("parseInt", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1) throw std::runtime_error("parseInt() expects 1 argument");
+        if (!args[0].isString()) throw std::runtime_error("parseInt() expects a string");
+        return FValue::integer(std::stoll(args[0].asString()->value));
+    });
+
+    defineNative("abs", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1) throw std::runtime_error("abs() expects 1 argument");
+        if (args[0].type == FValueType::VAL_INT) return FValue::integer(std::llabs(args[0].as.integer));
+        return FValue::floating(std::abs(args[0].asNumber()));
+    });
+
+    defineNative("min", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 2) throw std::runtime_error("min() expects 2 arguments");
+        if (args[0].isNumber() && args[1].isNumber())
+            return (args[0].asNumber() < args[1].asNumber()) ? args[0] : args[1];
+        throw std::runtime_error("min() expects numbers");
+    });
+
+    defineNative("max", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 2) throw std::runtime_error("max() expects 2 arguments");
+        if (args[0].isNumber() && args[1].isNumber())
+            return (args[0].asNumber() > args[1].asNumber()) ? args[0] : args[1];
+        throw std::runtime_error("max() expects numbers");
+    });
+
+    defineNative("sqrt", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1) throw std::runtime_error("sqrt() expects 1 argument");
+        return FValue::floating(std::sqrt(args[0].asNumber()));
+    });
+
+    defineNative("pow", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 2) throw std::runtime_error("pow() expects 2 arguments");
+        return FValue::floating(std::pow(args[0].asNumber(), args[1].asNumber()));
+    });
+
+    defineNative("floor", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1) throw std::runtime_error("floor() expects 1 argument");
+        double v = std::floor(args[0].asNumber());
+        if (v == (long long)v && v < 1e15) return FValue::integer((long long)v);
+        return FValue::floating(v);
+    });
+
+    defineNative("ceil", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1) throw std::runtime_error("ceil() expects 1 argument");
+        double v = std::ceil(args[0].asNumber());
+        if (v == (long long)v && v < 1e15) return FValue::integer((long long)v);
+        return FValue::floating(v);
+    });
+
+    defineNative("round", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1) throw std::runtime_error("round() expects 1 argument");
+        double v = std::round(args[0].asNumber());
+        if (v == (long long)v && v < 1e15) return FValue::integer((long long)v);
+        return FValue::floating(v);
+    });
+
+    static std::mt19937 rng(std::random_device{}());
+    defineNative("random", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 0) throw std::runtime_error("random() expects 0 arguments");
+        std::uniform_real_distribution<double> dist(0.0, 1.0);
+        return FValue::floating(dist(rng));
+    });
+
+    defineNative("randomInt", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 2) throw std::runtime_error("randomInt() expects 2 arguments");
+        long long min = args[0].asInteger();
+        long long max = args[1].asInteger();
+        if (min > max) throw std::runtime_error("randomInt() min must be <= max");
+        std::uniform_int_distribution<long long> dist(min, max);
+        return FValue::integer(dist(rng));
+    });
 }
 
-// ============================================================
-// JNI/FFI Support
-// ============================================================
+void ForgeVM::defineModules() {
+    {
+        auto* ioMod = new GCMap();
+        ioMod->entries["write"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() < 1 || args.size() > 2) throw std::runtime_error("io.write() expects 1 or 2 arguments");
+            std::string s = args[0].toString();
+            std::string dest = args.size() > 1 && args[1].isString() ? args[1].asString()->value : "stdout";
+            if (dest == "stdout") std::cout << s;
+            else if (dest == "stderr") std::cerr << s;
+            return FValue::nil();
+        }, "io.write"));
+        ioMod->entries["read"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() != 1) throw std::runtime_error("io.read() expects 1 argument");
+            std::string path = args[0].asString()->value;
+            std::ifstream file(path);
+            if (!file.is_open()) throw std::runtime_error("io.read() cannot open file: " + path);
+            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            return FValue::obj(new GCString(content));
+        }, "io.read"));
+        modules_["io"] = FValue::obj(ioMod);
+    }
+    {
+        auto* osMod = new GCMap();
+        osMod->entries["time"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            return FValue::integer((long long)std::time(nullptr));
+        }, "os.time"));
+        osMod->entries["execute"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() != 1) throw std::runtime_error("os.execute() expects 1 argument");
+            std::string cmd = args[0].asString()->value;
+            int result = std::system(cmd.c_str());
+            return FValue::integer((long long)result);
+        }, "os.execute"));
+        modules_["os"] = FValue::obj(osMod);
+    }
+    {
+        auto* jsonMod = new GCMap();
+        jsonMod->entries["stringify"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() != 1) throw std::runtime_error("json.stringify() expects 1 argument");
+            return FValue::obj(new GCString(args[0].toString()));
+        }, "json.stringify"));
+        jsonMod->entries["parse"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() != 1) throw std::runtime_error("json.parse() expects 1 argument");
+            return FValue::nil();
+        }, "json.parse"));
+        modules_["json"] = FValue::obj(jsonMod);
+    }
+    {
+        auto* pathMod = new GCMap();
+        pathMod->entries["join"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() < 1) throw std::runtime_error("path.join() expects at least 1 argument");
+            std::string result;
+            for (size_t i = 0; i < args.size(); i++) {
+                if (i > 0) result += "/";
+                result += args[i].asString()->value;
+            }
+            return FValue::obj(new GCString(result));
+        }, "path.join"));
+        pathMod->entries["base"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() != 1) throw std::runtime_error("path.base() expects 1 argument");
+            std::string p = args[0].asString()->value;
+            size_t pos = p.find_last_of("/\\");
+            return FValue::obj(new GCString(pos != std::string::npos ? p.substr(pos + 1) : p));
+        }, "path.base"));
+        modules_["path"] = FValue::obj(pathMod);
+    }
+    {
+        auto* sysMod = new GCMap();
+        sysMod->entries["version"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            return FValue::obj(new GCString("2.0.0"));
+        }, "system.version"));
+        sysMod->entries["platform"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+#ifdef __linux__
+            return FValue::obj(new GCString("linux"));
+#elif __APPLE__
+            return FValue::obj(new GCString("darwin"));
+#else
+            return FValue::obj(new GCString("unknown"));
+#endif
+        }, "system.platform"));
+        modules_["system"] = FValue::obj(sysMod);
+    }
+    {
+        static struct termios origTermios;
+        static bool rawModeActive = false;
 
-extern "C" {
-    // JNI-like interface
-    typedef struct JNIEnv_* JNIEnv;
-    typedef struct JavaVM_* JavaVM;
-    
-    // JNI functions would be implemented here
-    // jint JNI_OnLoad(JavaVM* vm, void* reserved);
-    // void JNI_OnUnload(JavaVM* vm, void* reserved);
+        auto* uiMod = new GCMap();
+
+        uiMod->entries["init"] = FValue::obj(new GCNative([](const std::vector<FValue>&) -> FValue {
+            std::cout << "\x1b[?25l" << std::flush;
+            return FValue::nil();
+        }, "ui.init"));
+
+        uiMod->entries["cleanup"] = FValue::obj(new GCNative([](const std::vector<FValue>&) -> FValue {
+            std::cout << "\x1b[?25h\x1b[0m\x1b[2J\x1b[H" << std::flush;
+            if (rawModeActive) {
+                tcsetattr(STDIN_FILENO, TCSAFLUSH, &origTermios);
+                rawModeActive = false;
+            }
+            return FValue::nil();
+        }, "ui.cleanup"));
+
+        uiMod->entries["enable_raw_mode"] = FValue::obj(new GCNative([](const std::vector<FValue>&) -> FValue {
+            if (!isatty(STDIN_FILENO)) return FValue::nil();
+            tcgetattr(STDIN_FILENO, &origTermios);
+            struct termios raw = origTermios;
+            raw.c_lflag &= ~(ECHO | ICANON | ISIG);
+            raw.c_iflag &= ~(IXON | ICRNL);
+            raw.c_cc[VMIN] = 0;
+            raw.c_cc[VTIME] = 1;
+            tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+            rawModeActive = true;
+            return FValue::nil();
+        }, "ui.enable_raw_mode"));
+
+        uiMod->entries["disable_raw_mode"] = FValue::obj(new GCNative([](const std::vector<FValue>&) -> FValue {
+            if (rawModeActive) {
+                tcsetattr(STDIN_FILENO, TCSAFLUSH, &origTermios);
+                rawModeActive = false;
+            }
+            return FValue::nil();
+        }, "ui.disable_raw_mode"));
+
+        uiMod->entries["clear"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            int bg = args.size() > 0 && args[0].isNumber() ? (int)args[0].asInteger() : 40;
+            std::cout << "\x1b[2J\x1b[H\x1b[48;5;" << bg << "m" << std::flush;
+            return FValue::nil();
+        }, "ui.clear"));
+
+        uiMod->entries["flush"] = FValue::obj(new GCNative([](const std::vector<FValue>&) -> FValue {
+            std::cout << std::flush;
+            return FValue::nil();
+        }, "ui.flush"));
+
+        uiMod->entries["draw_text"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() < 3) throw std::runtime_error("ui.draw_text(x, y, text, fg, bg, bold)");
+            int x = (int)args[0].asInteger();
+            int y = (int)args[1].asInteger();
+            std::string text = args[2].toString();
+            int fg = args.size() > 3 && args[3].isNumber() ? (int)args[3].asInteger() : 97;
+            int bg = args.size() > 4 && args[4].isNumber() ? (int)args[4].asInteger() : 40;
+            bool bold = args.size() > 5 && args[5].isTruthy();
+            std::cout << "\x1b[" << y << ";" << x << "H";
+            if (bold) std::cout << "\x1b[1m";
+            std::cout << "\x1b[38;5;" << fg << "m\x1b[48;5;" << bg << "m" << text;
+            if (bold) std::cout << "\x1b[22m";
+            return FValue::nil();
+        }, "ui.draw_text"));
+
+        uiMod->entries["draw_char"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() < 3) throw std::runtime_error("ui.draw_char(x, y, char, fg, bg)");
+            int x = (int)args[0].asInteger();
+            int y = (int)args[1].asInteger();
+            int ch = args[2].isNumber() ? (int)args[2].asInteger() : (int)args[2].toString()[0];
+            int fg = args.size() > 3 && args[3].isNumber() ? (int)args[3].asInteger() : 97;
+            int bg = args.size() > 4 && args[4].isNumber() ? (int)args[4].asInteger() : 40;
+            std::cout << "\x1b[" << y << ";" << x << "H"
+                      << "\x1b[38;5;" << fg << "m\x1b[48;5;" << bg << "m"
+                      << (char)ch;
+            return FValue::nil();
+        }, "ui.draw_char"));
+
+        uiMod->entries["draw_rect"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() < 5) throw std::runtime_error("ui.draw_rect(x, y, w, h, bg)");
+            int x = (int)args[0].asInteger();
+            int y = (int)args[1].asInteger();
+            int w = (int)args[2].asInteger();
+            int h = (int)args[3].asInteger();
+            int bg = (int)args[4].asInteger();
+            for (int row = 0; row < h; row++) {
+                std::cout << "\x1b[" << (y + row) << ";" << x << "H"
+                          << "\x1b[48;5;" << bg << "m";
+                for (int col = 0; col < w; col++) std::cout << ' ';
+            }
+            return FValue::nil();
+        }, "ui.draw_rect"));
+
+        uiMod->entries["draw_hline"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() < 4) throw std::runtime_error("ui.draw_hline(x, y, w, color)");
+            int x = (int)args[0].asInteger();
+            int y = (int)args[1].asInteger();
+            int w = (int)args[2].asInteger();
+            int color = (int)args[3].asInteger();
+            std::cout << "\x1b[" << y << ";" << x << "H\x1b[48;5;" << color << "m";
+            for (int i = 0; i < w; i++) std::cout << "\xe2\x94\x80";
+            return FValue::nil();
+        }, "ui.draw_hline"));
+
+        uiMod->entries["get_size"] = FValue::obj(new GCNative([](const std::vector<FValue>&) -> FValue {
+            struct winsize ws;
+            if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
+                auto* arr = new GCArray();
+                arr->elements.push_back(FValue::integer(ws.ws_col));
+                arr->elements.push_back(FValue::integer(ws.ws_row));
+                return FValue::obj(arr);
+            }
+            auto* arr = new GCArray();
+            arr->elements.push_back(FValue::integer(80));
+            arr->elements.push_back(FValue::integer(24));
+            return FValue::obj(arr);
+        }, "ui.get_size"));
+
+        uiMod->entries["read_key"] = FValue::obj(new GCNative([](const std::vector<FValue>&) -> FValue {
+            char c = 0;
+            if (read(STDIN_FILENO, &c, 1) == 1) {
+                if (c == 27) {
+                    char seq[3] = {0, 0, 0};
+                    read(STDIN_FILENO, &seq[0], 1);
+                    read(STDIN_FILENO, &seq[1], 1);
+                    if (seq[0] == '[') {
+                        auto* m = new GCMap();
+                        m->entries["type"] = FValue::obj(new GCString("arrow"));
+                        switch (seq[1]) {
+                            case 'A': m->entries["key"] = FValue::obj(new GCString("up")); break;
+                            case 'B': m->entries["key"] = FValue::obj(new GCString("down")); break;
+                            case 'C': m->entries["key"] = FValue::obj(new GCString("right")); break;
+                            case 'D': m->entries["key"] = FValue::obj(new GCString("left")); break;
+                            default: m->entries["key"] = FValue::obj(new GCString("unknown")); break;
+                        }
+                        return FValue::obj(m);
+                    }
+                    auto* m = new GCMap();
+                    m->entries["type"] = FValue::obj(new GCString("escape"));
+                    m->entries["key"] = FValue::obj(new GCString("escape"));
+                    return FValue::obj(m);
+                }
+                auto* m = new GCMap();
+                m->entries["type"] = FValue::obj(new GCString("char"));
+                m->entries["key"] = FValue::obj(new GCString(std::string(1, c)));
+                m->entries["code"] = FValue::integer(c);
+                return FValue::obj(m);
+            }
+            auto* m = new GCMap();
+            m->entries["type"] = FValue::obj(new GCString("none"));
+            m->entries["key"] = FValue::obj(new GCString(""));
+            return FValue::obj(m);
+        }, "ui.read_key"));
+
+        uiMod->entries["poll_input"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            int timeout_ms = args.size() > 0 && args[0].isNumber() ? (int)args[0].asInteger() : 100;
+            fd_set fds;
+            FD_ZERO(&fds);
+            FD_SET(STDIN_FILENO, &fds);
+            struct timeval tv;
+            tv.tv_sec = timeout_ms / 1000;
+            tv.tv_usec = (timeout_ms % 1000) * 1000;
+            int ret = select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv);
+            return FValue::boolean(ret > 0);
+        }, "ui.poll_input"));
+
+        uiMod->entries["enter_alt_screen"] = FValue::obj(new GCNative([](const std::vector<FValue>&) -> FValue {
+            std::cout << "\x1b[?1049h" << std::flush;
+            return FValue::nil();
+        }, "ui.enter_alt_screen"));
+
+        uiMod->entries["exit_alt_screen"] = FValue::obj(new GCNative([](const std::vector<FValue>&) -> FValue {
+            std::cout << "\x1b[?1049l" << std::flush;
+            return FValue::nil();
+        }, "ui.exit_alt_screen"));
+
+        modules_["ui"] = FValue::obj(uiMod);
+    }
+    {
+        auto* testMod = new GCMap();
+        static int testPassed = 0, testFailed = 0;
+        static std::string currentDescribe;
+
+        testMod->entries["assert"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() < 1 || args.size() > 2) throw std::runtime_error("assert() expects 1 or 2 arguments");
+            bool cond = args[0].isTruthy();
+            std::string msg = args.size() > 1 ? args[1].toString() : "assertion failed";
+            if (cond) {
+                testPassed++;
+                std::cout << "  [PASS] " << currentDescribe << " > " << msg << std::endl;
+            } else {
+                testFailed++;
+                std::cout << "  [FAIL] " << currentDescribe << " > " << msg << std::endl;
+            }
+            return FValue::nil();
+        }, "assert"));
+
+        testMod->entries["assertEquals"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() < 2 || args.size() > 3) throw std::runtime_error("assertEquals() expects 2 or 3 arguments");
+            bool eq = args[0].equals(args[1]);
+            std::string msg = args.size() > 2 ? args[2].toString() : "assertEquals failed";
+            if (eq) {
+                testPassed++;
+                std::cout << "  [PASS] " << currentDescribe << " > " << msg << std::endl;
+            } else {
+                testFailed++;
+                std::cout << "  [FAIL] " << currentDescribe << " > " << msg << " (got " << args[0].toString() << " vs " << args[1].toString() << ")" << std::endl;
+            }
+            return FValue::nil();
+        }, "assertEquals"));
+
+        testMod->entries["assertNotEquals"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() < 2 || args.size() > 3) throw std::runtime_error("assertNotEquals() expects 2 or 3 arguments");
+            bool neq = !args[0].equals(args[1]);
+            std::string msg = args.size() > 2 ? args[2].toString() : "assertNotEquals failed";
+            if (neq) {
+                testPassed++;
+                std::cout << "  [PASS] " << currentDescribe << " > " << msg << std::endl;
+            } else {
+                testFailed++;
+                std::cout << "  [FAIL] " << currentDescribe << " > " << msg << std::endl;
+            }
+            return FValue::nil();
+        }, "assertNotEquals"));
+
+        testMod->entries["describe"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() != 1) throw std::runtime_error("describe() expects 1 argument");
+            if (!args[0].isString()) throw std::runtime_error("describe() expects a string");
+            if (testPassed > 0 || testFailed > 0)
+                std::cout << "\nResults: " << testPassed << " passed, " << testFailed << " failed" << std::endl;
+            testPassed = 0; testFailed = 0;
+            currentDescribe = args[0].asString()->value;
+            std::cout << "\n--- " << currentDescribe << " ---" << std::endl;
+            return FValue::nil();
+        }, "describe"));
+
+        testMod->entries["results"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (testPassed > 0 || testFailed > 0)
+                std::cout << "\nResults: " << testPassed << " passed, " << testFailed << " failed" << std::endl;
+            return FValue::nil();
+        }, "results"));
+
+        modules_["test"] = FValue::obj(testMod);
+    }
 }
 
 } // namespace forge::fvm

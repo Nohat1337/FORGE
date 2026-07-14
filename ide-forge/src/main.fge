@@ -1,461 +1,679 @@
 // Forge Studio - Terminal IDE for Forge Language
 // Written in Forge, runs on FVM
 
-import "ui/ui"
-import "ui/editor"
-import "ui/file_explorer"
-import "ui/repl"
-import "ui/syntax"
-import "ui/theme"
-import "fs"
+import "ui"
 import "os"
-import "repl"
-import "syntax"
-import "theme"
+import "io"
+import "path"
 
 // ============================================================
-// Types
+// Theme
 // ============================================================
 
-type Position = { line: int, col: int }
-type Range = { start: Position, end: Position }
-type Token = { type: string, text: string, line: int, col: int }
-type Style = { fg: int, bg: int, bold: bool, italic: bool, underline: bool }
+let THEME_FG = 252
+let THEME_BG = 235
+let THEME_GUTTER = 243
+let THEME_LINE_NUM = 240
+let THEME_CURSOR = 252
+let THEME_CURSOR_BG = 75
+let THEME_STATUS_BG = 33
+let THEME_STATUS_FG = 255
+let THEME_TITLE_BG = 236
+let THEME_BORDER = 238
+let THEME_KEYWORD = 33
+let THEME_STRING = 114
+let THEME_NUMBER = 209
+let THEME_COMMENT = 243
+let THEME_FUNCTION = 214
+let THEME_IDENT = 252
 
 // ============================================================
-// Theme System
+// Editor State
 // ============================================================
 
-let current_theme = "dark"
-let theme = theme.get_theme(current_theme)
-
-fn set_theme(name: string) {
-    if let Some(t) = theme.get_theme(name) {
-        current_theme = name
-        theme = t
-    }
-}
-
-// ============================================================
-// Syntax Highlighter
-// ============================================================
-
-let highlighter = syntax.SyntaxHighlighter.new()
-
-fn highlight_line(line: string, line_num: int) -> list<Style> {
-    let spans = syntax.highlight_line(line, line_num)
-    let styles = []
-    for span in spans {
-        styles.push(Style { 
-            fg: syntax.colorForToken(span.type, theme.get_current()), 
-            bg: theme.editor_bg, 
-            bold: false, 
-            italic: false, 
-            underline: false 
-        })
-    }
-    return styles
-}
+let lines = []
+let cursor_line = 0
+let cursor_col = 0
+let scroll_top = 0
+let scroll_left = 0
+let filename = ""
+let modified = false
+let mode = "normal"
+let message = ""
+let file_explorer_visible = true
+let command_buffer = ""
 
 // ============================================================
-// Main Application
+// File Operations
 // ============================================================
 
-struct App {
-    editor: Editor
-    explorer: FileExplorer
-    repl: Repl
-    terminal: Terminal
-    theme_name: string
-    show_explorer: bool
-    show_repl: bool
-    show_terminal: bool
-    active_panel: string  // "editor", "explorer", "repl", "terminal"
-    command_mode: bool
-    command_buffer: string
-    status_message: string
-    status_time: float
-    running: bool
-}
-
-fn App.new(root_path: string) -> App {
-    App {
-        editor: Editor.new(),
-        explorer: FileExplorer.new(root_path),
-        repl: Repl.new(),
-        terminal: Terminal.new(24, 80),
-        theme_name: "dark",
-        show_explorer: true,
-        show_repl: false,
-        show_terminal: false,
-        active_panel: "editor",
-        command_mode: false,
-        command_buffer: "",
-        status_message: "",
-        status_time: 0.0,
-        running: true
-    }
-}
-
-fn App.run(this: *App) {
-    // Initialize terminal
-    ui.init()
-    ui.enable_raw_mode()
-    ui.enable_mouse()
-    ui.enter_alt_screen()
-    
-    // Apply default theme
-    theme.set(current_theme)
-    editor.set_theme(current_theme)
-    
-    // Initialize REPL
-    repl.set_forge_path("/home/nohat1337/c++-fork/build/forge")
-    
-    // Load file if provided
-    if os.args().len() > 1 {
-        editor.load_file(os.args()[1])
-    }
-    
-    // Main loop
-    while this.running {
-        // Handle resize
-        if Terminal.resize_flag {
-            Terminal.resize_flag = false
-            let (w, h) = ui.get_size()
-            terminal.resize(h, w)
+fn load_file(path) {
+    let content = io.read(path)
+    filename = path
+    lines = []
+    let current = ""
+    let i = 0
+    while (i < len(content)) {
+        let ch = content[i]
+        if (ch == "\n") {
+            lines.push(current)
+            current = ""
+        } else {
+            current = current + ch
         }
-        
-        // Render
-        this.render()
-        
-        // Handle input
-        if ui.poll_input(0) {
-            let key = ui.read_key()
-            this.handle_input(key)
+        i = i + 1
+    }
+    if (current != "") {
+        lines.push(current)
+    }
+    if (len(lines) == 0) {
+        lines.push("")
+    }
+    modified = false
+    message = "Opened: " + path
+}
+
+fn save_file() {
+    if (filename == "") {
+        message = "No filename"
+        return
+    }
+    let content = ""
+    let i = 0
+    while (i < len(lines)) {
+        content = content + lines[i]
+        if (i < len(lines) - 1) {
+            content = content + "\n"
+        }
+        i = i + 1
+    }
+    os.execute("echo " + content + " > " + filename)
+    modified = false
+    message = "Saved: " + filename
+}
+
+fn new_file() {
+    lines = [""]
+    filename = ""
+    cursor_line = 0
+    cursor_col = 0
+    scroll_top = 0
+    modified = false
+    message = "New file"
+}
+
+// ============================================================
+// Syntax Highlighting
+// ============================================================
+
+fn is_keyword(word) {
+    if (word == "fn") { return true }
+    if (word == "let") { return true }
+    if (word == "const") { return true }
+    if (word == "if") { return true }
+    if (word == "else") { return true }
+    if (word == "while") { return true }
+    if (word == "for") { return true }
+    if (word == "in") { return true }
+    if (word == "return") { return true }
+    if (word == "class") { return true }
+    if (word == "extends") { return true }
+    if (word == "this") { return true }
+    if (word == "true") { return true }
+    if (word == "false") { return true }
+    if (word == "nil") { return true }
+    if (word == "import") { return true }
+    if (word == "try") { return true }
+    if (word == "catch") { return true }
+    if (word == "throw") { return true }
+    if (word == "and") { return true }
+    if (word == "or") { return true }
+    if (word == "not") { return true }
+    return false
+}
+
+fn color_for_token(token_type) {
+    if (token_type == "keyword") { return THEME_KEYWORD }
+    if (token_type == "string") { return THEME_STRING }
+    if (token_type == "number") { return THEME_NUMBER }
+    if (token_type == "comment") { return THEME_COMMENT }
+    if (token_type == "function") { return THEME_FUNCTION }
+    return THEME_IDENT
+}
+
+fn tokenize_line(line) {
+    let tokens = []
+    let i = 0
+    let len_line = len(line)
+    let current = ""
+
+    while (i < len_line) {
+        let ch = line[i]
+
+        // Comments
+        if (ch == "/" && i + 1 < len_line && line[i + 1] == "/") {
+            if (current != "") {
+                tokens.push(["ident", current])
+                current = ""
+            }
+            tokens.push(["comment", substring(line, i, len_line)])
+            i = len_line
+        }
+        // Strings
+        else if (ch == "\"") {
+            if (current != "") {
+                tokens.push(["ident", current])
+                current = ""
+            }
+            let j = i + 1
+            while (j < len_line && line[j] != "\"") {
+                j = j + 1
+            }
+            tokens.push(["string", substring(line, i, j + 1)])
+            i = j + 1
+        }
+        // Numbers
+        else if (ch >= "0" && ch <= "9") {
+            if (current != "") {
+                tokens.push(["ident", current])
+                current = ""
+            }
+            let k = i
+            while (k < len_line && ((line[k] >= "0" && line[k] <= "9") || line[k] == ".")) {
+                k = k + 1
+            }
+            tokens.push(["number", substring(line, i, k)])
+            i = k
+        }
+        // Words (identifiers/keywords)
+        else if ((ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || ch == "_") {
+            current = current + ch
+            i = i + 1
+            // Check if next char ends the word
+            if (i >= len_line || !((line[i] >= "a" && line[i] <= "z") || (line[i] >= "A" && line[i] <= "Z") || (line[i] >= "0" && line[i] <= "9") || line[i] == "_")) {
+                if (is_keyword(current)) {
+                    tokens.push(["keyword", current])
+                } else if (i < len_line && line[i] == "(") {
+                    tokens.push(["function", current])
+                } else {
+                    tokens.push(["ident", current])
+                }
+                current = ""
+            }
+        }
+        // Operators and other chars
+        else {
+            if (current != "") {
+                tokens.push(["ident", current])
+                current = ""
+            }
+            if (ch == " " || ch == "\t") {
+                tokens.push(["space", ch])
+            } else {
+                tokens.push(["op", ch])
+            }
+            i = i + 1
         }
     }
-    
-    ui.exit_alt_screen()
-    ui.disable_mouse()
-    ui.disable_raw_mode()
+    if (current != "") {
+        tokens.push(["ident", current])
+    }
+    return tokens
 }
 
-fn App.render(this: *App) {
-    let (w, h) = ui.get_size()
-    let theme = theme.get_current()
-    
-    // Clear screen
-    ui.clear(theme.editor_bg)
-    
-    // Layout calculations
-    let repl_h = if this.show_repl { 12 } else { 0 }
-    let term_h = if this.show_terminal { 10 } else { 0 }
-    let explorer_w = if this.show_explorer { 28 } else { 0 }
-    let editor_h = h - 2 - repl_h - term_h  // menu(1) + status(1) + repl + term
-    let editor_start_row = 2  // menu bar at row 1
-    let editor_start_col = 29  // explorer width + 1
-    let editor_w = w - 28
-    
-    // ========== MENU BAR ==========
-    ui.draw_rect(0, 0, w, 1, theme.menu_bg)
-    let menus = [" FILE ", " EDIT ", " VIEW ", " RUN ", " HELP "]
-    let mut col = 1
-    for (i, m) in menus.enumerate() {
-        if this.active_menu == i { ui.draw_text(col, 0, " " + m + " ", theme.accent1, theme.menu_fg, true) }
-        else { ui.draw_text(col, 0, " " + m + " ", theme.menu_bg, theme.menu_fg, false) }
-        col += m.len() + 2
-    }
-    
-    // Theme indicator
-    let theme_str = theme_type_to_string(current_theme)
-    ui.draw_text(w - 20, 0, "Theme: " + theme_str, theme.menu_bg, theme.menu_fg, false)
-    
-    // Active menu dropdown
-    if this.active_menu != MENU_NONE {
-        this.render_dropdown_menu()
-    }
-    
-    // ========== FILE EXPLORER ==========
-    if this.show_explorer {
-        this.explorer.render(1, 1, h - 2 - this.show_repl * 12 - this.show_terminal * 10, 28, this.explorer.get_selected())
-    }
-    
-    // Separator
-    let sep_col = 28
-    for i in 1..h-1 {
-        ui.draw_char(sep_col, i, '│', theme.panel_border, theme.panel_fg)
-    }
-    
-    // ========== EDITOR ==========
-    let editor_w = w - 28
-    let minimap_w = 18
-    editor.render(1, 29, h - 2 - this.show_repl * 12 - this.show_terminal * 10, editor_w, true)
-    
-    // ========== REPL ==========
-    if this.show_repl {
-        let repl_y = h - 12 - (if this.show_terminal { 10 } else { 0 })
-        repl.render(1, repl_y, w, 12, theme.get_current())
-        
-        // Separator above REPL
-        ui.draw_hline(1, repl_y - 1, w, theme.accent3)
-    }
-    
-    // ========== TERMINAL ==========
-    if this.show_terminal {
-        let term_y = h - 10 - 1
-        terminal.render(1, term_y, w, 10, theme.get_current())
-    }
-    
-    // ========== STATUS BAR ==========
-    this.render_status_bar(w, h)
-    
-    // ========== COMMAND PROMPT ==========
-    if this.command_mode {
-        this.render_command_prompt()
-    }
-    
-    // ========== PROMPT OVERLAY ==========
-    if this.prompt_mode != PROMPT_NONE {
-        this.render_prompt()
-    }
-    
-    ui.flush()
+// ============================================================
+// Cursor Movement
+// ============================================================
+
+fn clamp_cursor() {
+    if (cursor_line < 0) { cursor_line = 0 }
+    if (cursor_line >= len(lines)) { cursor_line = len(lines) - 1 }
+    let max_col = len(lines[cursor_line])
+    if (cursor_col < 0) { cursor_col = 0 }
+    if (cursor_col > max_col) { cursor_col = max_col }
 }
 
-fn App.render_status_bar(this: *App, w: int, h: int) {
-    let theme = theme.get_current()
-    let row = h - 1
-    ui.draw_rect(0, row, w, 1, theme.status_bg)
-    
-    let mode = if editor.is_modified() { "● " } else { "  " }
-    let filename = editor.get_filename()
-    let lang = editor.get_language()
-    let pos = "Ln " + (editor.cursor_line + 1).to_string() + ", Col " + (editor.cursor_col + 1).to_string()
-    let total = editor.line_count().to_string() + " lines"
-    
-    let left = " " + mode + filename + " | " + lang + " | " + pos + " | " + total + " "
-    ui.draw_text(0, row, left, theme.status_bg, theme.status_fg, true)
-    
-    // Time
-    let now = os.time()
-    let time_str = os.format_time(now, "%H:%M:%S")
-    ui.draw_text(w - 10, row, time_str, theme.status_bg, theme.status_fg)
-    
-    // Status message
-    if !this.status_message.is_empty() && os.time() - this.status_time < 3.0 {
-        ui.draw_text((w - this.status_message.len()) / 2, row, this.status_message, theme.status_bg, theme.accent1, true)
+fn move_up() {
+    if (cursor_line > 0) {
+        cursor_line = cursor_line - 1
+        clamp_cursor()
     }
 }
 
-fn App.render_command_prompt(this: *App) {
-    let pw = 60
-    let ph = 3
-    let px = (w - pw) / 2
-    let py = (h - ph) / 2
-    
-    // Background box
-    for i in 0..ph {
-        ui.draw_rect(px, py + i, pw, 1, theme.panel_bg)
-        for j in 0..pw { ui.draw_char(px + j, py + i, ' ', theme.panel_bg, 0) }
+fn move_down() {
+    if (cursor_line < len(lines) - 1) {
+        cursor_line = cursor_line + 1
+        clamp_cursor()
     }
-    
-    // Title
-    ui.draw_text(px + 2, py, this.prompt_title, theme.panel_bg, theme.accent1, true)
-    
-    // Input
-    ui.draw_text(px + 2, py + 1, this.command_buffer + "█", theme.panel_bg, theme.fg_editor)
-    
-    // Hint
-    ui.draw_text(px + 2, py + 2, "Enter=confirm  Esc=cancel", theme.panel_bg, theme.fg_comment)
 }
 
-fn App.render_prompt(this: *App) {
-    // Similar to command prompt but for file open/save/goto
-    this.render_command_prompt()
+fn move_left() {
+    if (cursor_col > 0) {
+        cursor_col = cursor_col - 1
+    } else if (cursor_line > 0) {
+        cursor_line = cursor_line - 1
+        cursor_col = len(lines[cursor_line])
+    }
 }
 
-fn App.handle_input(this: *App, key: KeyEvent) {
-    if this.prompt_mode != PROMPT_NONE {
-        this.handle_prompt_key(key)
-        return
+fn move_right() {
+    if (cursor_col < len(lines[cursor_line])) {
+        cursor_col = cursor_col + 1
+    } else if (cursor_line < len(lines) - 1) {
+        cursor_line = cursor_line + 1
+        cursor_col = 0
     }
-    
-    if this.active_menu != MENU_NONE {
-        this.handle_menu_key(key)
-        return
+}
+
+fn move_home() {
+    cursor_col = 0
+}
+
+fn move_end() {
+    cursor_col = len(lines[cursor_line])
+}
+
+// ============================================================
+// Editing
+// ============================================================
+
+fn insert_char(ch) {
+    let line = lines[cursor_line]
+    lines[cursor_line] = substring(line, 0, cursor_col) + ch + substring(line, cursor_col, len(line))
+    cursor_col = cursor_col + 1
+    modified = true
+}
+
+fn delete_char() {
+    let line = lines[cursor_line]
+    if (cursor_col < len(line)) {
+        lines[cursor_line] = substring(line, 0, cursor_col) + substring(line, cursor_col + 1, len(line))
+        modified = true
+    } else if (cursor_line < len(lines) - 1) {
+        let next_line = lines[cursor_line + 1]
+        lines[cursor_line] = line + next_line
+        let i = cursor_line + 1
+        while (i < len(lines) - 1) {
+            lines[i] = lines[i + 1]
+            i = i + 1
+        }
+        lines.pop()
+        modified = true
     }
-    
-    // Global keybindings
-    if key.ctrl {
-        match key.code {
-            's' => this.save_file(),
-            'n' => this.new_file(),
-            'o' => this.prompt_open(),
-            'q' => this.running = false,
-            'z' => editor.undo(),
-            'y' => editor.redo(),
-            'a' => editor.move_home(),
-            'e' => editor.move_end(),
-            'f' => this.prompt_search(),
-            'g' => this.prompt_goto(),
-            't' => this.cycle_theme(),
-            'm' => this.toggle_minimap(),
-            'r' => this.toggle_repl(),
-            '`' => this.toggle_terminal(),
-            _ => {}
+}
+
+fn backspace() {
+    if (cursor_col > 0) {
+        let line = lines[cursor_line]
+        lines[cursor_line] = substring(line, 0, cursor_col - 1) + substring(line, cursor_col, len(line))
+        cursor_col = cursor_col - 1
+        modified = true
+    } else if (cursor_line > 0) {
+        let prev_len = len(lines[cursor_line - 1])
+        lines[cursor_line - 1] = lines[cursor_line - 1] + lines[cursor_line]
+        let i = cursor_line
+        while (i < len(lines) - 1) {
+            lines[i] = lines[i + 1]
+            i = i + 1
+        }
+        lines.pop()
+        cursor_line = cursor_line - 1
+        cursor_col = prev_len
+        modified = true
+    }
+}
+
+fn insert_newline() {
+    let line = lines[cursor_line]
+    let before = substring(line, 0, cursor_col)
+    let after = substring(line, cursor_col, len(line))
+    lines[cursor_line] = before
+
+    let i = len(lines) - 1
+    while (i >= cursor_line) {
+        lines[i + 1] = lines[i]
+        i = i - 1
+    }
+    lines[cursor_line + 1] = after
+    cursor_line = cursor_line + 1
+    cursor_col = 0
+    modified = true
+}
+
+// ============================================================
+// Rendering
+// ============================================================
+
+fn render_editor(term_w, term_h) {
+    let editor_h = term_h - 3
+    let gutter_w = 4
+
+    // Background
+    ui.draw_rect(1, 2, term_w - 1, editor_h, THEME_BG)
+
+    // Line numbers + code
+    let row = 0
+    while (row < editor_h) {
+        let line_idx = scroll_top + row
+        let y = row + 2
+
+        if (line_idx < len(lines)) {
+            // Line number
+            let num_str = str(line_idx + 1)
+            while (len(num_str) < gutter_w) {
+                num_str = " " + num_str
+            }
+            let num_color = THEME_LINE_NUM
+            if (line_idx == cursor_line) {
+                num_color = THEME_FG
+            }
+            ui.draw_text(1, y, num_str, num_color, THEME_BG, line_idx == cursor_line)
+
+            // Code line with syntax highlighting
+            let line_text = lines[line_idx]
+            let display_offset = scroll_left
+            let tokens = tokenize_line(line_text)
+            let col = gutter_w + 2
+
+            let t = 0
+            let char_pos = 0
+            while (t < len(tokens) && col < term_w - 1) {
+                let token = tokens[t]
+                let ttype = token[0]
+                let ttext = token[1]
+
+                let color = color_for_token(ttype)
+                let display_text = ttext
+                if (display_offset > 0) {
+                    if (display_offset < len(ttext)) {
+                        display_text = substring(ttext, display_offset, len(ttext))
+                    } else {
+                        t = t + 1
+                        char_pos = char_pos + len(ttext)
+                        continue
+                    }
+                }
+                let avail = term_w - col - 1
+                if (len(display_text) > avail) {
+                    display_text = substring(display_text, 0, avail)
+                }
+                if (len(display_text) > 0) {
+                    ui.draw_text(col, y, display_text, color, THEME_BG, false)
+                    col = col + len(display_text)
+                }
+                char_pos = char_pos + len(ttext)
+                t = t + 1
+            }
+
+            // Cursor block
+            if (line_idx == cursor_line) {
+                let cx = gutter_w + 2 + cursor_col - scroll_left
+                if (cx >= gutter_w + 2 && cx < term_w) {
+                    let ch_char = " "
+                    if (cursor_col < len(line_text)) {
+                        ch_char = line_text[cursor_col]
+                    }
+                    ui.draw_text(cx, y, ch_char, THEME_CURSOR, THEME_CURSOR_BG, false)
+                }
+            }
+        }
+        row = row + 1
+    }
+
+    // Right border
+    let r = 0
+    while (r < editor_h) {
+        ui.draw_char(term_w, r + 2, 124, THEME_BORDER, THEME_BG)
+        r = r + 1
+    }
+}
+
+fn render_status_bar(term_w, term_h) {
+    // Status bar at bottom
+    ui.draw_rect(1, term_h, term_w - 1, 1, THEME_STATUS_BG)
+    let mode_str = "[NORMAL] "
+    let file_str = filename
+    if (file_str == "") { file_str = "[No Name]" }
+    let mod_str = " "
+    if (modified) { mod_str = "*" }
+    let pos_str = "Ln " + str(cursor_line + 1) + ", Col " + str(cursor_col + 1)
+    let total_str = str(len(lines)) + " lines"
+    let left = mode_str + file_str + mod_str + " | " + pos_str + " | " + total_str
+    ui.draw_text(1, term_h, left, THEME_STATUS_FG, THEME_STATUS_BG, true)
+}
+
+fn render_title_bar(term_w) {
+    ui.draw_rect(1, 1, term_w - 1, 1, THEME_TITLE_BG)
+    let title = " Forge Studio "
+    ui.draw_text(1, 1, title, THEME_FG, THEME_TITLE_BG, true)
+    let hints = " Ctrl+S:Save  Ctrl+Q:Quit  Ctrl+N:New  Ctrl+O:Open "
+    let hint_x = term_w - len(hints) - 1
+    if (hint_x > len(title) + 2) {
+        ui.draw_text(hint_x, 1, hints, THEME_COMMENT, THEME_TITLE_BG, false)
+    }
+}
+
+fn render_file_explorer(term_w, term_h) {
+    if (file_explorer_visible == false) { return }
+
+    let panel_w = 22
+    let panel_h = term_h - 3
+    ui.draw_rect(1, 2, panel_w, panel_h, THEME_TITLE_BG)
+    ui.draw_text(2, 2, " FILES ", THEME_FG, THEME_TITLE_BG, true)
+
+    let y = 3
+    let max_show = panel_h - 2
+    let i = 0
+    while (i < len(lines) && i < max_show) {
+        let display = " " + str(i + 1) + " "
+        if (len(display) > panel_w - 2) {
+            display = substring(display, 0, panel_w - 2)
+        }
+        let color = THEME_IDENT
+        if (i == cursor_line) {
+            color = THEME_FUNCTION
+        }
+        ui.draw_text(1, y + i, display, color, THEME_BG, i == cursor_line)
+        i = i + 1
+    }
+}
+
+fn render_message_bar(term_w, term_h) {
+    if (message != "") {
+        ui.draw_rect(1, term_h - 1, term_w - 1, 1, THEME_TITLE_BG)
+        ui.draw_text(2, term_h - 1, message, THEME_STRING, THEME_TITLE_BG, false)
+    }
+}
+
+// ============================================================
+// Input Handling
+// ============================================================
+
+fn handle_key(key) {
+    let ktype = key["type"]
+    let kcode = key["key"]
+
+    if (mode == "command") {
+        if (kcode == "escape") {
+            mode = "normal"
+            command_buffer = ""
+            message = ""
+        } else {
+            if (ktype == "char") {
+                if (kcode == "\n") {
+                    execute_command()
+                    mode = "normal"
+                    command_buffer = ""
+                } else {
+                    if (kcode == "\x7f") {
+                        if (len(command_buffer) > 0) {
+                            command_buffer = substring(command_buffer, 0, len(command_buffer) - 1)
+                        }
+                    } else {
+                        command_buffer = command_buffer + kcode
+                    }
+                }
+            }
         }
         return
     }
-    
-    // Function keys
-    match key.code {
-        KEY_F5 => this.toggle_repl(),
-        KEY_F9 => this.run_file(),
-        KEY_F10 => this.cycle_theme(),
-        KEY_F11 => this.toggle_minimap(),
-        KEY_F12 => this.toggle_terminal(),
-        _ => {}
-    }
-    
-    // If REPL is active and focused
-    if this.show_repl && this.repl.is_active() {
-        if key.code == KEY_ESCAPE { this.repl.deactivate() }
-        else { this.repl.handle_key(key) }
-        return
-    }
-    
-    // Editor keys
-    match key.code {
-        KEY_UP => editor.move_up(),
-        KEY_DOWN => editor.move_down(),
-        KEY_LEFT => editor.move_left(),
-        KEY_RIGHT => editor.move_right(),
-        KEY_HOME => editor.move_home(),
-        KEY_END => editor.move_end(),
-        KEY_PAGE_UP => editor.page_up(this.get_editor_height()),
-        KEY_PAGE_DOWN => editor.page_down(this.get_editor_height()),
-        KEY_DELETE => editor.delete_char(),
-        KEY_BACKSPACE => editor.backspace(),
-        KEY_ENTER => editor.insert_newline(),
-        KEY_TAB => editor.insert_tab(),
-        KEY_ESCAPE => { this.active_menu = MENU_NONE; this.command_mode = false },
-        KEY_CHAR(c) => editor.insert_char(c),
-        _ => {}
+
+    // Normal mode - arrow keys
+    if (ktype == "arrow") {
+        if (kcode == "up") { move_up() }
+        if (kcode == "down") { move_down() }
+        if (kcode == "left") { move_left() }
+        if (kcode == "right") { move_right() }
     }
 }
 
-fn App.handle_prompt_key(this: *App, key: KeyEvent) {
-    // Handle prompt input
-}
-
-fn App.handle_menu_key(this: *App, key: KeyEvent) {
-    // Handle menu navigation
-}
-
-fn App.prompt_open(this: *App) {
-    this.command_mode = true
-    this.command_buffer = ":e "
-    this.prompt_mode = PROMPT_OPEN
-    this.prompt_title = "Open File"
-}
-
-fn App.prompt_save_as(this: *App) {
-    this.command_mode = true
-    this.command_buffer = ":w "
-    this.prompt_mode = PROMPT_SAVEAS
-    this.prompt_title = "Save As"
-}
-
-fn App.prompt_search(this: *App) {
-    this.command_mode = true
-    this.command_buffer = "/"
-    this.prompt_mode = PROMPT_SEARCH
-    this.prompt_title = "Search"
-}
-
-fn App.prompt_goto(this: *App) {
-    this.command_mode = true
-    this.command_buffer = ":"
-    this.prompt_mode = PROMPT_GOTO
-    this.prompt_title = "Go to Line"
-}
-
-fn App.cycle_theme(this: *App) {
-    let themes = ["dark", "dracula", "nord", "light", "solarized_dark", "solarized_light", "monokai", "gruvbox", "onedark"]
-    let idx = themes.iter().position(|t| t == current_theme).unwrap_or(0)
-    current_theme = themes[(idx + 1) % themes.len()]
-    theme.set_theme(current_theme)
-    editor.set_theme(current_theme)
-    set_status("Theme: " + current_theme)
-}
-
-fn App.toggle_minimap(this: *App) {
-    // Toggle minimap visibility
-}
-
-fn App.toggle_repl(this: *App) {
-    this.show_repl = !this.show_repl
-    if this.show_repl { this.repl.activate() }
-    set_status(if this.show_repl { "REPL opened" } else { "REPL closed" })
-}
-
-fn App.toggle_terminal(this: *App) {
-    this.show_terminal = !this.show_terminal
-    if this.show_terminal { this.terminal.activate() }
-    set_status(if this.show_terminal { "Terminal opened" } else { "Terminal closed" })
-}
-
-fn App.new_file(this: *App) {
-    editor.new_file()
-    set_status("New file")
-}
-
-fn App.save_file(this: *App) {
-    if editor.filepath.is_none() {
-        this.prompt_save_as()
-    } else {
-        editor.save()
-        set_status("Saved: " + editor.filepath.unwrap())
+fn execute_command() {
+    if (command_buffer == "q") {
+        ui.cleanup()
+        os.execute("reset")
+        print("Goodbye!")
+        os.execute("exit 0")
+    }
+    else if (command_buffer == "w") {
+        save_file()
+    }
+    else if (command_buffer == "wq") {
+        save_file()
+        ui.cleanup()
+        os.execute("reset")
+        print("Goodbye!")
+        os.execute("exit 0")
+    }
+    else if (substring(command_buffer, 0, 2) == "e ") {
+        let path = substring(command_buffer, 2, len(command_buffer))
+        load_file(path)
+    }
+    else if (substring(command_buffer, 0, 2) == "w ") {
+        filename = substring(command_buffer, 2, len(command_buffer))
+        save_file()
+    }
+    else {
+        message = "Unknown command: " + command_buffer
     }
 }
 
-fn App.run_file(this: *App) {
-    if editor.filepath.is_none() {
-        save_current_file()
-        if editor.filepath.is_none() { return }
-    }
-    
-    // Save first
-    if editor.is_modified() {
-        editor.save()
-    }
-    
-    let cmd = "./forge " + editor.filepath.unwrap()
-    if this.show_repl {
-        repl.run(cmd)
-    } else {
-        // Show output in a temporary REPL
-        this.show_repl = true
-        repl.activate()
-        repl.run(cmd)
-        set_status("Running: " + editor.filepath.unwrap())
-    }
-}
+// ============================================================
+// Main Loop
+// ============================================================
 
-fn set_status(msg: string) {
-    status_message = msg
-    status_time = os.time()
+fn ensure_cursor_visible(term_h) {
+    let editor_h = term_h - 3
+    if (cursor_line < scroll_top) {
+        scroll_top = cursor_line
+    }
+    if (cursor_line >= scroll_top + editor_h) {
+        scroll_top = cursor_line - editor_h + 1
+    }
+    if (scroll_top < 0) { scroll_top = 0 }
 }
 
 fn main() {
     let args = os.args()
-    let root = if args.len() > 1 { args[1] } else { os.cwd() }
-    
-    let mut app = App.new(root)
-    
-    if args.len() > 2 {
-        editor.load_file(args[2])
+
+    // Load file if provided
+    if (len(args) > 1) {
+        load_file(args[1])
+    } else {
+        new_file()
     }
-    
-    app.run()
+
+    // Setup terminal
+    ui.enter_alt_screen()
+    ui.enable_raw_mode()
+
+    message = "Welcome to Forge Studio! Type :q to quit."
+
+    // Main loop
+    let running = true
+    while (running) {
+        let size = ui.get_size()
+        let term_w = size[0]
+        let term_h = size[1]
+
+        ensure_cursor_visible(term_h)
+
+        // Render
+        ui.clear(THEME_BG)
+        render_title_bar(term_w)
+        render_editor(term_w, term_h)
+        render_status_bar(term_w, term_h)
+        render_message_bar(term_w, term_h)
+        ui.flush()
+
+        // Wait for input
+        if (ui.poll_input(100)) {
+            let key = ui.read_key()
+
+            if (mode == "command") {
+                handle_key(key)
+            } else {
+                let ktype = key["type"]
+                let kcode = key["key"]
+
+                if (ktype == "char") {
+                    let code = key["code"]
+
+                    // Ctrl combinations
+                    if (code == 17) { // Ctrl+Q
+                        ui.disable_raw_mode()
+                        ui.exit_alt_screen()
+                        print("Goodbye!")
+                        return
+                    }
+                    else if (code == 19) { // Ctrl+S
+                        save_file()
+                    }
+                    else if (code == 14) { // Ctrl+N
+                        new_file()
+                    }
+                    else if (code == 15) { // Ctrl+O
+                        mode = "command"
+                        command_buffer = "e "
+                        message = "Open file: "
+                    }
+                    else if (code == 27) { // ESC
+                        // already handled as escape
+                    }
+                    // Normal mode keys
+                    else if (code == 58) { // :
+                        mode = "command"
+                        command_buffer = ""
+                        message = ":"
+                    }
+                    else if (code == 106) { move_down() }
+                    else if (code == 107) { move_up() }
+                    else if (code == 104) { move_left() }
+                    else if (code == 108) { move_right() }
+                    else if (code == 48) { move_home() }
+                    else if (code == 36) { move_end() }
+                    else if (code == 127 || code == 8) { backspace() }
+                    else if (code == 13 || code == 10) { insert_newline() }
+                    else if (code == 9) {
+                        insert_char(" ")
+                        insert_char(" ")
+                        insert_char(" ")
+                        insert_char(" ")
+                    }
+                    else if (code >= 32 && code < 127) {
+                        insert_char(kcode)
+                    }
+                }
+                else if (ktype == "arrow") {
+                    if (kcode == "up") { move_up() }
+                    if (kcode == "down") { move_down() }
+                    if (kcode == "left") { move_left() }
+                    if (kcode == "right") { move_right() }
+                }
+                else if (ktype == "escape") {
+                    mode = "normal"
+                    command_buffer = ""
+                }
+            }
+        }
+    }
 }

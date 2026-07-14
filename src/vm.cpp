@@ -12,6 +12,10 @@
 #include <windows.h>
 #else
 #include <dlfcn.h>
+#include <unistd.h>
+#include <termios.h>
+#include <sys/ioctl.h>
+#include <sys/select.h>
 #endif
 
 VM::VM() {
@@ -543,6 +547,186 @@ void VM::defineModules() {
 #endif
         }, "system.platform"));
         modules_["system"] = Value::obj(sysMod);
+    }
+    {
+        static struct termios origTermios;
+        static bool rawModeActive = false;
+
+        auto uiMod = std::make_shared<ObjMap>();
+
+        uiMod->entries["init"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>&) -> Value {
+            std::cout << "\x1b[?25l" << std::flush;
+            return Value::nil();
+        }, "ui.init"));
+
+        uiMod->entries["cleanup"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>&) -> Value {
+            std::cout << "\x1b[?25h\x1b[0m\x1b[2J\x1b[H" << std::flush;
+            if (rawModeActive) {
+                tcsetattr(STDIN_FILENO, TCSAFLUSH, &origTermios);
+                rawModeActive = false;
+            }
+            return Value::nil();
+        }, "ui.cleanup"));
+
+        uiMod->entries["enable_raw_mode"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>&) -> Value {
+            if (!isatty(STDIN_FILENO)) return Value::nil();
+            tcgetattr(STDIN_FILENO, &origTermios);
+            struct termios raw = origTermios;
+            raw.c_lflag &= ~(ECHO | ICANON | ISIG);
+            raw.c_iflag &= ~(IXON | ICRNL);
+            raw.c_cc[VMIN] = 0;
+            raw.c_cc[VTIME] = 1;
+            tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+            rawModeActive = true;
+            return Value::nil();
+        }, "ui.enable_raw_mode"));
+
+        uiMod->entries["disable_raw_mode"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>&) -> Value {
+            if (rawModeActive) {
+                tcsetattr(STDIN_FILENO, TCSAFLUSH, &origTermios);
+                rawModeActive = false;
+            }
+            return Value::nil();
+        }, "ui.disable_raw_mode"));
+
+        uiMod->entries["clear"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+            int bg = args.size() > 0 && args[0].isNumber() ? (int)args[0].asInteger() : 40;
+            std::cout << "\x1b[2J\x1b[H\x1b[48;5;" << bg << "m" << std::flush;
+            return Value::nil();
+        }, "ui.clear"));
+
+        uiMod->entries["flush"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>&) -> Value {
+            std::cout << std::flush;
+            return Value::nil();
+        }, "ui.flush"));
+
+        uiMod->entries["draw_text"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+            if (args.size() < 3) throw std::runtime_error("ui.draw_text(x, y, text, fg, bg, bold)");
+            int x = (int)args[0].asInteger();
+            int y = (int)args[1].asInteger();
+            std::string text = args[2].asString()->value;
+            int fg = args.size() > 3 ? (int)args[3].asInteger() : 97;
+            int bg = args.size() > 4 ? (int)args[4].asInteger() : 40;
+            bool bold = args.size() > 5 && args[5].as.boolean;
+            std::cout << "\x1b[" << y << ";" << x << "H";
+            if (bold) std::cout << "\x1b[1m";
+            std::cout << "\x1b[38;5;" << fg << "m\x1b[48;5;" << bg << "m" << text;
+            if (bold) std::cout << "\x1b[22m";
+            return Value::nil();
+        }, "ui.draw_text"));
+
+        uiMod->entries["draw_char"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+            if (args.size() < 3) throw std::runtime_error("ui.draw_char(x, y, char, fg, bg)");
+            int x = (int)args[0].asInteger();
+            int y = (int)args[1].asInteger();
+            int ch = args[2].isString() ? (int)args[2].asString()->value[0] : (int)args[2].asInteger();
+            int fg = args.size() > 3 ? (int)args[3].asInteger() : 97;
+            int bg = args.size() > 4 ? (int)args[4].asInteger() : 40;
+            std::cout << "\x1b[" << y << ";" << x << "H"
+                      << "\x1b[38;5;" << fg << "m\x1b[48;5;" << bg << "m"
+                      << (char)ch;
+            return Value::nil();
+        }, "ui.draw_char"));
+
+        uiMod->entries["draw_rect"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+            if (args.size() < 5) throw std::runtime_error("ui.draw_rect(x, y, w, h, bg)");
+            int x = (int)args[0].asInteger();
+            int y = (int)args[1].asInteger();
+            int w = (int)args[2].asInteger();
+            int h = (int)args[3].asInteger();
+            int bg = (int)args[4].asInteger();
+            for (int row = 0; row < h; row++) {
+                std::cout << "\x1b[" << (y + row) << ";" << x << "H"
+                          << "\x1b[48;5;" << bg << "m";
+                for (int col = 0; col < w; col++) std::cout << ' ';
+            }
+            return Value::nil();
+        }, "ui.draw_rect"));
+
+        uiMod->entries["draw_hline"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+            if (args.size() < 4) throw std::runtime_error("ui.draw_hline(x, y, w, color)");
+            int x = (int)args[0].asInteger();
+            int y = (int)args[1].asInteger();
+            int w = (int)args[2].asInteger();
+            int color = (int)args[3].asInteger();
+            std::cout << "\x1b[" << y << ";" << x << "H\x1b[48;5;" << color << "m";
+            for (int i = 0; i < w; i++) std::cout << "\xe2\x94\x80";
+            return Value::nil();
+        }, "ui.draw_hline"));
+
+        uiMod->entries["get_size"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>&) -> Value {
+            struct winsize ws;
+            if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
+                auto arr = std::make_shared<ObjArray>();
+                arr->elements.push_back(Value::integer(ws.ws_col));
+                arr->elements.push_back(Value::integer(ws.ws_row));
+                return Value::obj(arr);
+            }
+            auto arr = std::make_shared<ObjArray>();
+            arr->elements.push_back(Value::integer(80));
+            arr->elements.push_back(Value::integer(24));
+            return Value::obj(arr);
+        }, "ui.get_size"));
+
+        uiMod->entries["read_key"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>&) -> Value {
+            char c = 0;
+            if (read(STDIN_FILENO, &c, 1) == 1) {
+                if (c == 27) {
+                    char seq[2] = {0, 0};
+                    read(STDIN_FILENO, &seq[0], 1);
+                    read(STDIN_FILENO, &seq[1], 1);
+                    if (seq[0] == '[') {
+                        auto m = std::make_shared<ObjMap>();
+                        m->entries["type"] = Value::obj(std::make_shared<ObjString>("arrow"));
+                        switch (seq[1]) {
+                            case 'A': m->entries["key"] = Value::obj(std::make_shared<ObjString>("up")); break;
+                            case 'B': m->entries["key"] = Value::obj(std::make_shared<ObjString>("down")); break;
+                            case 'C': m->entries["key"] = Value::obj(std::make_shared<ObjString>("right")); break;
+                            case 'D': m->entries["key"] = Value::obj(std::make_shared<ObjString>("left")); break;
+                            default: m->entries["key"] = Value::obj(std::make_shared<ObjString>("unknown")); break;
+                        }
+                        return Value::obj(m);
+                    }
+                    auto m = std::make_shared<ObjMap>();
+                    m->entries["type"] = Value::obj(std::make_shared<ObjString>("escape"));
+                    m->entries["key"] = Value::obj(std::make_shared<ObjString>("escape"));
+                    return Value::obj(m);
+                }
+                auto m = std::make_shared<ObjMap>();
+                m->entries["type"] = Value::obj(std::make_shared<ObjString>("char"));
+                m->entries["key"] = Value::obj(std::make_shared<ObjString>(std::string(1, c)));
+                m->entries["code"] = Value::integer(c);
+                return Value::obj(m);
+            }
+            auto m = std::make_shared<ObjMap>();
+            m->entries["type"] = Value::obj(std::make_shared<ObjString>("none"));
+            m->entries["key"] = Value::obj(std::make_shared<ObjString>(""));
+            return Value::obj(m);
+        }, "ui.read_key"));
+
+        uiMod->entries["poll_input"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
+            int timeout_ms = args.size() > 0 ? (int)args[0].asInteger() : 100;
+            fd_set fds;
+            FD_ZERO(&fds);
+            FD_SET(STDIN_FILENO, &fds);
+            struct timeval tv;
+            tv.tv_sec = timeout_ms / 1000;
+            tv.tv_usec = (timeout_ms % 1000) * 1000;
+            int ret = select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv);
+            return Value::boolean(ret > 0);
+        }, "ui.poll_input"));
+
+        uiMod->entries["enter_alt_screen"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>&) -> Value {
+            std::cout << "\x1b[?1049h" << std::flush;
+            return Value::nil();
+        }, "ui.enter_alt_screen"));
+
+        uiMod->entries["exit_alt_screen"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>&) -> Value {
+            std::cout << "\x1b[?1049l" << std::flush;
+            return Value::nil();
+        }, "ui.exit_alt_screen"));
+
+        modules_["ui"] = Value::obj(uiMod);
     }
 }
 

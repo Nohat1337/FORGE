@@ -1,16 +1,13 @@
+#include "fvm/runtime.hpp"
+#include "pkg_manager.hpp"
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include <string>
-#include "lexer.hpp"
-#include "parser.hpp"
-#include "compiler.hpp"
-#include "vm.hpp"
-#include "pkg_manager.hpp"
 
-#define FORGE_VERSION "1.0.0"
+#define FORGEVM_VERSION "2.0.0"
 
-std::string readFile(const std::string& path) {
+static std::string readFile(const std::string& path) {
     std::ifstream file(path);
     if (!file.is_open()) throw std::runtime_error("Cannot open file: " + path);
     std::stringstream buffer;
@@ -18,12 +15,10 @@ std::string readFile(const std::string& path) {
     return buffer.str();
 }
 
-void repl() {
-    Compiler compiler;
-    compiler.resetForRepl();
-    VM vm;
+static void repl() {
+    forge::fvm::ForgeVM vm;
 
-    std::cout << "Forge v" << FORGE_VERSION << " (REPL)\n";
+    std::cout << "Forge VM v" << FORGEVM_VERSION << " (FVM REPL)\n";
     std::cout << "Type 'exit' or Ctrl+D to quit.\n\n";
 
     std::string line;
@@ -33,56 +28,33 @@ void repl() {
             std::cout << "\n";
             break;
         }
-
         if (line.empty()) continue;
         if (line == "exit" || line == "quit") break;
 
-        try {
-            Lexer lexer(line);
-            auto tokens = lexer.tokenize();
-            Parser parser(tokens);
-            auto program = parser.parse();
-            auto fn = compiler.compile(program);
-            if (compiler.hasError()) {
-                std::cerr << "Compile Error: " << compiler.errorMessage() << "\n";
-                continue;
-            }
-            vm.interpret(fn);
-        } catch (const std::exception& e) {
-            std::cerr << "Error: " << e.what() << "\n";
-        }
+        vm.interpretSource(line, "<repl>");
     }
 }
 
-void runString(const std::string& code) {
-    Lexer lexer(code);
-    auto tokens = lexer.tokenize();
-    Parser parser(tokens);
-    auto program = parser.parse();
-    Compiler compiler;
-    auto fn = compiler.compile(program);
-    if (compiler.hasError()) {
-        std::cerr << "Compile Error: " << compiler.errorMessage() << "\n";
-        return;
-    }
-    VM vm;
-    vm.interpret(fn);
+static void runString(const std::string& code) {
+    forge::fvm::ForgeVM vm;
+    vm.interpretSource(code, "<string>");
 }
 
 int main(int argc, char* argv[]) {
-    // Handle command line flags
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--version" || arg == "-v") {
-            std::cout << "Forge Programming Language v" << FORGE_VERSION << "\n";
+            std::cout << "Forge VM v" << FORGEVM_VERSION << " (FVM)\n";
             return 0;
         } else if (arg == "--help" || arg == "-h") {
-            std::cout << "Usage: forge [options] [file.fge]\n";
+            std::cout << "Usage: forgevm [options] [file.fge]\n";
+            std::cout << "Forge Virtual Machine - Production bytecode interpreter\n\n";
             std::cout << "Options:\n";
             std::cout << "  -v, --version    Show version\n";
             std::cout << "  -h, --help       Show this help\n";
             std::cout << "  -e <code>        Execute string as code\n";
             std::cout << "  pkg <cmd>        Package manager commands\n";
+            std::cout << "  --gc-stats       Show GC statistics after execution\n";
             std::cout << "  (no args)        Start REPL\n";
             return 0;
         } else if (arg == "-e") {
@@ -98,27 +70,38 @@ int main(int argc, char* argv[]) {
             return pkg_main(pkgArgc, pkgArgv);
         }
     }
-    
+
     if (argc < 2) {
         repl();
         return 0;
     }
 
+    bool showGcStats = false;
+    std::string filename;
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--gc-stats") {
+            showGcStats = true;
+        } else if (filename.empty()) {
+            filename = arg;
+        }
+    }
+
+    if (filename.empty()) {
+        repl();
+        return 0;
+    }
+
     try {
-        std::string source = readFile(argv[1]);
-        Lexer lexer(source);
-        auto tokens = lexer.tokenize();
-        Parser parser(tokens);
-        auto program = parser.parse();
-        Compiler compiler;
-        auto fn = compiler.compile(program);
-        if (compiler.hasError()) {
-            std::cerr << "Compile Error: " << compiler.errorMessage() << "\n";
+        forge::fvm::ForgeVM vm;
+        if (!vm.interpretSource(readFile(filename), filename)) {
             return 1;
         }
-        VM vm;
-        if (!vm.interpret(fn)) {
-            return 1;
+        if (showGcStats) {
+            auto& gc = vm.gc();
+            std::cout << "\n--- GC Stats ---\n";
+            std::cout << "Heap allocated: " << gc.getAllocated() << " bytes\n";
+            std::cout << "Heap size: " << gc.getHeapSize() << " bytes\n";
         }
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";

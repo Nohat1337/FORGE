@@ -122,8 +122,9 @@ StmtPtr Parser::parseIf() {
     expect(TokenType::RPAREN, "Expected ')'");
     auto thenBlock = std::get<BlockStmt>(parseBlock()->node).statements;
     std::vector<StmtPtr> elseBranch;
+    skipNewlines();
     if (match(TokenType::ELSE)) {
-        if (check(TokenType::IF)) { advance(); elseBranch.push_back(parseIf()); }
+        if (check(TokenType::IF)) { elseBranch.push_back(parseIf()); }
         else { elseBranch = std::get<BlockStmt>(parseBlock()->node).statements; }
     }
     return makeStmt(IfStmt{cond, thenBlock, elseBranch});
