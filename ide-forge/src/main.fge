@@ -463,6 +463,8 @@ fn is_keyword(word) {
     if (word == "and") { return true }
     if (word == "or") { return true }
     if (word == "not") { return true }
+    if (word == "break") { return true }
+    if (word == "continue") { return true }
     if (word == "struct") { return true }
     if (word == "impl") { return true }
     if (word == "enum") { return true }
