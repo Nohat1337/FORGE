@@ -1604,8 +1604,6 @@ fn handle_normal_key(key) {
         if (cd == 106) { move_down(); return }
         if (cd == 104) { move_left(); return }
         if (cd == 108) { move_right(); return }
-        if (cd == 119) { move_word_right(); return }
-        if (cd == 98) { move_word_left(); return }
         if (cd == 48) { move_home(); return }
         if (cd == 36) { move_end(); return }
         if (cd == 127 || cd == 8) { push_undo_snapshot(); backspace(); return }
