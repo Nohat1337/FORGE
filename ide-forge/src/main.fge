@@ -48,6 +48,94 @@ let SETTING_WORD_WRAP = false
 let SETTING_SYNTAX_HL = true
 
 // ============================================================
+// Frame Buffer (double buffering)
+// ============================================================
+
+let frame_buffer = ""
+
+fn fb_clear() {
+    frame_buffer = ""
+}
+
+fn fb_draw_rect(x, y, w, h, bg) {
+    let row = 0
+    while (row < h) {
+        frame_buffer = frame_buffer + "\x1b[" + str(y + row) + ";" + str(x) + "H"
+        frame_buffer = frame_buffer + "\x1b[48;5;" + str(bg) + "m"
+        let col = 0
+        while (col < w) {
+            frame_buffer = frame_buffer + " "
+            col = col + 1
+        }
+        row = row + 1
+    }
+}
+
+fn fb_draw_text(x, y, text, fg, bg, bold) {
+    frame_buffer = frame_buffer + "\x1b[" + str(y) + ";" + str(x) + "H"
+    if (bold) {
+        frame_buffer = frame_buffer + "\x1b[1m"
+    }
+    frame_buffer = frame_buffer + "\x1b[38;5;" + str(fg) + "m\x1b[48;5;" + str(bg) + "m" + text
+    if (bold) {
+        frame_buffer = frame_buffer + "\x1b[22m"
+    }
+}
+
+fn fb_draw_hline(x, y, w, fg, bg) {
+    frame_buffer = frame_buffer + "\x1b[" + str(y) + ";" + str(x) + "H"
+    frame_buffer = frame_buffer + "\x1b[38;5;" + str(fg) + "m\x1b[48;5;" + str(bg) + "m"
+    let i = 0
+    while (i < w) {
+        frame_buffer = frame_buffer + "\xe2\x94\x80"
+        i = i + 1
+    }
+}
+
+fn fb_draw_vline(x, y, h, fg, bg) {
+    let i = 0
+    while (i < h) {
+        frame_buffer = frame_buffer + "\x1b[" + str(y + i) + ";" + str(x) + "H"
+        frame_buffer = frame_buffer + "\x1b[38;5;" + str(fg) + "m\x1b[48;5;" + str(bg) + "m\xe2\x94\x82"
+        i = i + 1
+    }
+}
+
+fn fb_draw_corner(x, y, char, fg, bg) {
+    frame_buffer = frame_buffer + "\x1b[" + str(y) + ";" + str(x) + "H"
+    frame_buffer = frame_buffer + "\x1b[38;5;" + str(fg) + "m\x1b[48;5;" + str(bg) + "m" + char
+}
+
+fn fb_draw_corner_tl(x, y, fg, bg) { fb_draw_corner(x, y, "\xe2\x94\x8c", fg, bg) }
+fn fb_draw_corner_tr(x, y, fg, bg) { fb_draw_corner(x, y, "\xe2\x94\x90", fg, bg) }
+fn fb_draw_corner_bl(x, y, fg, bg) { fb_draw_corner(x, y, "\xe2\x94\x94", fg, bg) }
+fn fb_draw_corner_br(x, y, fg, bg) { fb_draw_corner(x, y, "\xe2\x94\x98", fg, bg) }
+fn fb_draw_tee_l(x, y, fg, bg) { fb_draw_corner(x, y, "\xe2\x94\x9c", fg, bg) }
+fn fb_draw_tee_r(x, y, fg, bg) { fb_draw_corner(x, y, "\xe2\x94\xa4", fg, bg) }
+
+fn fb_draw_box(x, y, w, h, fg, bg) {
+    fb_draw_corner_tl(x, y, fg, bg)
+    fb_draw_hline(x + 1, y, w - 2, fg, bg)
+    fb_draw_corner_tr(x + w - 1, y, fg, bg)
+    let i = 1
+    while (i < h - 1) {
+        fb_draw_text(x, y + i, " ", fg, bg, false)
+        fb_draw_vline(x + 1, y + i, 1, bg)
+        fb_draw_text(x + w - 1, y + i, " ", fg, bg, false)
+        fb_draw_vline(x + w - 1, y + i, 1, bg)
+        i = i + 1
+    }
+    fb_draw_corner_bl(x, y + h - 1, fg, bg)
+    fb_draw_hline(x + 1, y + h - 1, w - 2, fg, bg)
+    fb_draw_corner_br(x + w - 1, y + h - 1, fg, bg)
+}
+
+fn fb_flush() {
+    ui.draw_text(1, 1, frame_buffer, 0, 0, false)
+    fb_clear()
+}
+
+// ============================================================
 // Application State
 // ============================================================
 
@@ -940,19 +1028,75 @@ fn draw_box(x, y, w, h, fg, bg) {
 }
 
 // ============================================================
+// Frame Buffer (double buffering - no flicker)
+// ============================================================
+
+fn fb_draw_rect(x, y, w, h, color) {
+    ui.draw_rect(x, y, w, h, color)
+}
+
+fn fb_draw_text(x, y, text, fg, bg, bold) {
+    ui.draw_text(x, y, text, fg, bg, bold)
+}
+
+fn fb_draw_hline(x, y, w, fg, bg) {
+    ui.draw_hline_bg(x, y, w, fg, bg)
+}
+
+fn fb_draw_hline_bg(x, y, w, fg, bg) {
+    ui.draw_hline_bg(x, y, w, fg, bg)
+}
+
+fn fb_draw_vline(x, y, h, color) {
+    ui.draw_vline(x, y, h, color)
+}
+
+fn fb_draw_corner_tl(x, y, fg, bg) {
+    ui.draw_corner_tl(x, y, fg, bg)
+}
+
+fn fb_draw_corner_tr(x, y, fg, bg) {
+    ui.draw_corner_tr(x, y, fg, bg)
+}
+
+fn fb_draw_corner_bl(x, y, fg, bg) {
+    ui.draw_corner_bl(x, y, fg, bg)
+}
+
+fn fb_draw_corner_br(x, y, fg, bg) {
+    ui.draw_corner_br(x, y, fg, bg)
+}
+
+fn fb_draw_tee_l(x, y, fg, bg) {
+    ui.draw_tee_l(x, y, fg, bg)
+}
+
+fn fb_draw_tee_r(x, y, fg, bg) {
+    ui.draw_tee_r(x, y, fg, bg)
+}
+
+fn fb_flush() {
+    ui.flush()
+}
+
+fn fb_clear() {
+    // No-op - handled by per-panel backgrounds
+}
+
+// ============================================================
 // Rendering - Title Bar
 // ============================================================
 
 fn render_title_bar(term_w) {
-    ui.draw_rect(1, 1, term_w, 1, THEME_TITLE_BG)
+    fb_draw_rect(1, 1, term_w, 1, THEME_TITLE_BG)
     let title = " Forge Studio "
-    ui.draw_text(1, 1, title, THEME_PANEL_TITLE, THEME_TITLE_BG, true)
+    fb_draw_text(1, 1, title, THEME_PANEL_TITLE, THEME_TITLE_BG, true)
     let hints = " Ctrl+S Save | Ctrl+Z Undo | Ctrl+F Find | Ctrl+Q Quit | Ctrl+, Settings "
     let hx = term_w - len(hints) + 1
     if (hx > len(title) + 3) {
-        ui.draw_text(hx, 1, hints, THEME_COMMENT, THEME_TITLE_BG, false)
+        fb_draw_text(hx, 1, hints, THEME_COMMENT, THEME_TITLE_BG, false)
     }
-    ui.draw_hline_bg(1, 2, term_w, THEME_BORDER_FG, THEME_BG)
+    fb_draw_hline_bg(1, 2, term_w, THEME_BORDER_FG, THEME_BG)
 }
 
 // ============================================================
@@ -992,9 +1136,9 @@ fn render_status_bar(term_w, term_h) {
             mid = mid + " "
             d = d + 1
         }
-        ui.draw_text(mid_start, term_h, mid, THEME_STATUS_FG, THEME_STATUS_BG, false)
+        fb_draw_text(mid_start, term_h, mid, THEME_STATUS_FG, THEME_STATUS_BG, false)
     }
-    ui.draw_text(right_x, term_h, right, THEME_STATUS_FG, THEME_STATUS_BG, false)
+    fb_draw_text(right_x, term_h, right, THEME_STATUS_FG, THEME_STATUS_BG, false)
 }
 
 // ============================================================
@@ -1003,8 +1147,7 @@ fn render_status_bar(term_w, term_h) {
 
 fn render_message_bar(term_w, term_h) {
     if (message != "") {
-        ui.draw_rect(1, term_h - 1, term_w, 1, THEME_TITLE_BG)
-        ui.draw_text(2, term_h - 1, message, THEME_STRING, THEME_TITLE_BG, false)
+        fb_draw_text(2, term_h - 1, message, THEME_STRING, THEME_TITLE_BG, false)
     }
 }
 
@@ -1013,8 +1156,8 @@ fn render_message_bar(term_w, term_h) {
 // ============================================================
 
 fn render_file_explorer(px, py, pw, ph) {
-    draw_box(px, py, pw, ph, THEME_BORDER_FG, THEME_BORDER)
-    ui.draw_text(px + 2, py, " FILES ", THEME_PANEL_TITLE, THEME_BORDER, true)
+    fb_draw_box(px, py, pw, ph, THEME_BORDER_FG, THEME_BORDER)
+    fb_draw_text(px + 2, py, " FILES ", THEME_PANEL_TITLE, THEME_BORDER, true)
 
     let max_show = ph - 2
     let i = 0
@@ -1046,19 +1189,20 @@ fn render_file_explorer(px, py, pw, ph) {
                 if (fname == filename) {
                     color = THEME_FIND_ACTIVE
                 }
-                ui.draw_rect(px + 1, py + 1 + vi, pw - 2, 1, is_sel ? THEME_PANEL_SEL : THEME_PANEL_BG)
-                ui.draw_text(px + 1, py + 1 + vi, display, color, is_sel ? THEME_PANEL_SEL : THEME_PANEL_BG, is_sel)
+                let bg = is_sel ? THEME_PANEL_SEL : THEME_PANEL_BG
+                fb_draw_rect(px + 1, py + 1 + vi, pw - 2, 1, bg)
+                fb_draw_text(px + 1, py + 1 + vi, display, color, bg, is_sel)
                 vi = vi + 1
             }
         }
         i = i + 1
     }
     if (len(file_list) == 0) {
-        ui.draw_text(px + 2, py + 2, "(empty dir)", THEME_COMMENT, THEME_PANEL_BG, false)
+        fb_draw_text(px + 2, py + 2, "(empty dir)", THEME_COMMENT, THEME_PANEL_BG, false)
     }
 
     let bottom_y = py + ph - 1
-    ui.draw_text(px + 1, bottom_y, " r:Refresh Enter:Open ", THEME_COMMENT, THEME_BORDER, false)
+    fb_draw_text(px + 1, bottom_y, " r:Refresh Enter:Open ", THEME_COMMENT, THEME_BORDER, false)
 }
 
 // ============================================================
@@ -1640,15 +1784,18 @@ fn render_all(term_w, term_h) {
     }
     if (scroll_top < 0) { scroll_top = 0 }
 
-    // Per-panel backgrounds (no full-screen clear = no flicker)
-    // Title bar background
-    ui.draw_rect(1, 1, term_w, 1, THEME_TITLE_BG)
-    // Separator line
-    ui.draw_hline_bg(1, 2, term_w, THEME_BORDER_FG, THEME_BG)
-    // File explorer panel background
+    fb_clear()
+
+    // Title bar
+    fb_draw_rect(1, 1, term_w, 1, THEME_TITLE_BG)
+    // Separator
+    fb_draw_hline(1, 2, term_w, THEME_BORDER_FG, THEME_BG)
+
+    // File explorer background
     if (panel_visible) {
-        ui.draw_rect(1, 3, panel_width, term_h - 5, THEME_PANEL_BG)
+        fb_draw_rect(1, 3, panel_width, term_h - 5, THEME_PANEL_BG)
     }
+
     // Editor background
     let editor_x = 1
     let editor_w = term_w
@@ -1656,12 +1803,14 @@ fn render_all(term_w, term_h) {
         editor_x = panel_width + 2
         editor_w = term_w - panel_width - 1
     }
-    ui.draw_rect(editor_x, 3, editor_w, term_h - 5, THEME_BG)
-    // Status bar background
-    ui.draw_rect(1, term_h, term_w, 1, THEME_STATUS_BG)
-    // Message bar background
-    ui.draw_rect(1, term_h - 1, term_w, 1, THEME_TITLE_BG)
+    fb_draw_rect(editor_x, 3, editor_w, term_h - 5, THEME_BG)
 
+    // Status bar
+    fb_draw_rect(1, term_h, term_w, 1, THEME_STATUS_BG)
+    // Message bar
+    fb_draw_rect(1, term_h - 1, term_w, 1, THEME_TITLE_BG)
+
+    // Render components
     render_title_bar(term_w)
 
     if (panel_visible) {
@@ -1682,7 +1831,7 @@ fn render_all(term_w, term_h) {
         render_settings(term_w, term_h)
     }
 
-    ui.flush()
+    fb_flush()
 }
 
 // ============================================================
