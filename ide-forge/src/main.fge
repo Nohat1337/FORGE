@@ -58,7 +58,7 @@ let scroll_top = 0
 let scroll_left = 0
 let filename = ""
 let modified = false
-let mode = "normal"
+let mode = "insert"
 let message = ""
 let command_buffer = ""
 let panel_visible = true
@@ -1520,11 +1520,11 @@ fn handle_normal_key(key) {
     let cd = key["code"]
 
     if (kt == "escape") {
-        mode = "normal"
-        command_buffer = ""
-        message = ""
-        find_mode = false
-        goto_mode = false
+        if (mode == "insert") {
+            mode = "normal"
+        } else {
+            mode = "insert"
+        }
         return
     }
 
@@ -1593,31 +1593,29 @@ fn handle_normal_key(key) {
         if (cd == 4) { duplicate_line(); return }
         if (cd == 31) { toggle_comment(); return }
         if (cd == 100) { delete_line(); return }
-        if (cd == 97) { move_end(); return }
-        if (cd == 105) {
-            mode = "panel"
-            refresh_file_list()
-            message = "File explorer (r:refresh Enter:open Esc:close)"
+        
+        // Enter INSERT mode
+        if (kc == "i") {
+            mode = "insert"
+            message = "-- INSERT --"
             return
         }
-        if (cd == 107) { move_up(); return }
-        if (cd == 106) { move_down(); return }
-        if (cd == 104) { move_left(); return }
-        if (cd == 108) { move_right(); return }
-        if (cd == 48) { move_home(); return }
-        if (cd == 36) { move_end(); return }
-        if (cd == 127 || cd == 8) { push_undo_snapshot(); backspace(); return }
-        if (cd == 13 || cd == 10) { push_undo_snapshot(); insert_newline(); return }
-        if (cd == 9) {
-            push_undo_snapshot()
-            insert_char(" ")
-            insert_char(" ")
-            insert_char(" ")
-            insert_char(" ")
+        
+        if (kc == "a") {
+            move_right()
+            mode = "insert"
+            message = "-- INSERT --"
             return
         }
-        if (cd == 112) { page_up(); return }
-        if (cd == 110) { page_down(); return }
+        
+        if (kc == "h") { move_left(); return }
+        if (kc == "j") { move_down(); return }
+        if (kc == "k") { move_up(); return }
+        if (kc == "l") { move_right(); return }
+        if (kc == "p") { page_up(); return }
+        if (kc == "n") { page_down(); return }
+        
+        // Regular character input in normal mode (for quick typing)
         if (cd >= 32) {
             if (cd < 127) {
                 push_undo_snapshot()
@@ -1722,12 +1720,12 @@ fn main() {
                 let cd = key["code"]
 
                 if (kt == "escape") {
-                    mode = "normal"
+                    mode = "insert"
                     command_buffer = ""
                     message = ""
                 } else if (kt == "char") {
                     if (cd == 13 || cd == 10) {
-                        mode = "normal"
+                        mode = "insert"
                         execute_command()
                         command_buffer = ""
                     } else if (cd == 127 || cd == 8) {
@@ -1736,7 +1734,7 @@ fn main() {
                             message = ":" + command_buffer
                         }
                     } else if (cd == 27) {
-                        mode = "normal"
+                        mode = "insert"
                         command_buffer = ""
                         message = ""
                     } else {
@@ -1747,6 +1745,41 @@ fn main() {
                 render_all(term_w, term_h)
             } else if (mode == "panel") {
                 handle_panel_input(key)
+                render_all(term_w, term_h)
+            } else if (mode == "insert") {
+                let kt = key["type"]
+                let cd = key["code"]
+                let kc = key["key"]
+
+                if (kt == "escape") {
+                    mode = "normal"
+                    message = ""
+                } else if (kt == "arrow") {
+                    if (kc == "up") { move_up() }
+                    if (kc == "down") { move_down() }
+                    if (kc == "left") { move_left() }
+                    if (kc == "right") { move_right() }
+                } else if (kt == "special") {
+                    if (kc == "home") { move_home() }
+                    if (kc == "end") { move_end() }
+                    if (kc == "pageup") { page_up() }
+                    if (kc == "pagedown") { page_down() }
+                    if (kc == "delete") { delete_char() }
+                } else if (kt == "char") {
+                    if (cd == 127 || cd == 8) { push_undo_snapshot(); backspace() }
+                    else if (cd == 13 || cd == 10) { push_undo_snapshot(); insert_newline() }
+                    else if (cd == 9) {
+                        push_undo_snapshot()
+                        insert_char(" ")
+                        insert_char(" ")
+                        insert_char(" ")
+                        insert_char(" ")
+                    }
+                    else if (cd >= 32 && cd < 127) {
+                        push_undo_snapshot()
+                        insert_char(kc)
+                    }
+                }
                 render_all(term_w, term_h)
             } else {
                 handle_normal_key(key)
