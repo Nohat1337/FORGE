@@ -5,7 +5,7 @@
 #include "lexer.hpp"
 #include "parser.hpp"
 #include "compiler.hpp"
-#include "vm.hpp"
+#include "fvm/runtime.hpp"
 #include "pkg_manager.hpp"
 
 #define FORGE_VERSION "1.0.0"
@@ -19,9 +19,7 @@ std::string readFile(const std::string& path) {
 }
 
 void repl() {
-    Compiler compiler;
-    compiler.resetForRepl();
-    VM vm;
+    forge::fvm::ForgeVM vm;
 
     std::cout << "Forge v" << FORGE_VERSION << " (REPL)\n";
     std::cout << "Type 'exit' or Ctrl+D to quit.\n\n";
@@ -38,16 +36,9 @@ void repl() {
         if (line == "exit" || line == "quit") break;
 
         try {
-            Lexer lexer(line);
-            auto tokens = lexer.tokenize();
-            Parser parser(tokens);
-            auto program = parser.parse();
-            auto fn = compiler.compile(program);
-            if (compiler.hasError()) {
-                std::cerr << "Compile Error: " << compiler.errorMessage() << "\n";
-                continue;
+            if (!vm.interpretSource(line, "<repl>")) {
+                return;
             }
-            vm.interpret(fn);
         } catch (const std::exception& e) {
             std::cerr << "Error: " << e.what() << "\n";
         }
@@ -55,18 +46,8 @@ void repl() {
 }
 
 void runString(const std::string& code) {
-    Lexer lexer(code);
-    auto tokens = lexer.tokenize();
-    Parser parser(tokens);
-    auto program = parser.parse();
-    Compiler compiler;
-    auto fn = compiler.compile(program);
-    if (compiler.hasError()) {
-        std::cerr << "Compile Error: " << compiler.errorMessage() << "\n";
-        return;
-    }
-    VM vm;
-    vm.interpret(fn);
+    forge::fvm::ForgeVM vm;
+    vm.interpretSource(code, "<string>");
 }
 
 int main(int argc, char* argv[]) {
@@ -106,18 +87,8 @@ int main(int argc, char* argv[]) {
 
     try {
         std::string source = readFile(argv[1]);
-        Lexer lexer(source);
-        auto tokens = lexer.tokenize();
-        Parser parser(tokens);
-        auto program = parser.parse();
-        Compiler compiler;
-        auto fn = compiler.compile(program);
-        if (compiler.hasError()) {
-            std::cerr << "Compile Error: " << compiler.errorMessage() << "\n";
-            return 1;
-        }
-        VM vm;
-        if (!vm.interpret(fn)) {
+        forge::fvm::ForgeVM vm;
+        if (!vm.interpretSource(source, argv[1])) {
             return 1;
         }
     } catch (const std::exception& e) {

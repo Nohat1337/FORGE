@@ -308,7 +308,7 @@ bool FVMThread::callValue(const FValue& callee, int argCount) {
         push(result);
         return true;
     }
-    if (callee.isClass()) {
+if (callee.isClass()) {
         GCClass* klass = callee.asClass();
         auto* instance = new GCInstance(klass);
         stack[stackTop - argCount - 1] = FValue::obj(instance);
@@ -317,16 +317,20 @@ bool FVMThread::callValue(const FValue& callee, int argCount) {
             GCClosure* initClosure = it->second.closure;
             if (argCount != initClosure->function->arity) return false;
             FValue* calleeSlots = stack.data() + stackTop - argCount - 1;
+            calleeSlots[0] = FValue::obj(instance); // slot 0 = receiver (self/this)
             pushFrame(initClosure, calleeSlots, argCount);
         }
         return true;
     }
-    if (callee.isBoundMethod()) {
+if (callee.isBoundMethod()) {
         GCBoundMethod* bm = callee.asBoundMethod();
-        stack[stackTop - argCount - 1] = bm->receiver;
         GCClosure* closure = bm->method;
+        // Bound method has receiver bound; closure arity is user args only
         if (argCount != closure->function->arity) return false;
         FValue* calleeSlots = stack.data() + stackTop - argCount - 1;
+        // For the closure: slot 0 = receiver (bound method's receiver), slots 1+ = user args
+        calleeSlots[0] = bm->receiver; // slot 0 = receiver (self)
+        // User args are already at [1...] if any (from original call)
         pushFrame(closure, calleeSlots, argCount + 1);
         return true;
     }

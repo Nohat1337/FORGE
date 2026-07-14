@@ -766,7 +766,8 @@ bool VM::callValue(const Value& callee, int argCount) {
         stack[stack.size() - argCount - 1] = Value::obj(instance);
         auto it = klassShared->methods.find("init");
         if (it != klassShared->methods.end()) {
-            return call(it->second.closure.get(), argCount);
+            // init method expects receiver + user args
+            return call(it->second.closure.get(), argCount + 1);
         } else if (argCount != 0) {
             return handleError("Expected 0 arguments for constructor");
         }

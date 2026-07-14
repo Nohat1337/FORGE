@@ -195,6 +195,8 @@ struct GCMethod {
 // FVM Thread & Frames
 // ============================================================
 
+class FVMGC;  // Forward declaration
+
 struct FVMFrame {
     GCClosure* closure = nullptr;
     uint8_t* ip = nullptr;
@@ -217,6 +219,8 @@ struct FVMThread {
     static constexpr int STACK_SIZE = 1024 * 1024;
     std::vector<FValue> stack;
     int stackTop = 0;
+
+    FVMGC* gc = nullptr;  // Reference to GC for object allocation
 
     FVMFrame& currentFrame() { return frames[frameCount - 1]; }
     bool hasFrames() const { return frameCount > 0; }
