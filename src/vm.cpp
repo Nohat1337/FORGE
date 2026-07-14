@@ -775,7 +775,7 @@ bool VM::callValue(const Value& callee, int argCount) {
     if (callee.isBoundMethod()) {
         auto* bm = callee.asBoundMethod();
         stack[stack.size() - argCount - 1] = bm->receiver;
-        return call(bm->method.get(), argCount);
+        return call(bm->method.get(), argCount + 1);
     }
     return handleError("Cannot call " + callee.toString());
 }

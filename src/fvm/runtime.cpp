@@ -327,7 +327,7 @@ bool FVMThread::callValue(const FValue& callee, int argCount) {
         GCClosure* closure = bm->method;
         if (argCount != closure->function->arity) return false;
         FValue* calleeSlots = stack.data() + stackTop - argCount - 1;
-        pushFrame(closure, calleeSlots, argCount);
+        pushFrame(closure, calleeSlots, argCount + 1);
         return true;
     }
     return false;
@@ -1626,6 +1626,79 @@ void ForgeVM::defineModules() {
             return FValue::nil();
         }, "ui.draw_hline"));
 
+        uiMod->entries["draw_vline"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() < 4) throw std::runtime_error("ui.draw_vline(x, y, h, color)");
+            int x = (int)args[0].asInteger();
+            int y = (int)args[1].asInteger();
+            int h = (int)args[2].asInteger();
+            int color = (int)args[3].asInteger();
+            for (int i = 0; i < h; i++) {
+                std::cout << "\x1b[" << (y + i) << ";" << x << "H\x1b[48;5;" << color << "m"
+                          << "\xe2\x94\x82";
+            }
+            return FValue::nil();
+        }, "ui.draw_vline"));
+
+        uiMod->entries["draw_hline_bg"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() < 5) throw std::runtime_error("ui.draw_hline_bg(x, y, w, fg, bg)");
+            int x = (int)args[0].asInteger();
+            int y = (int)args[1].asInteger();
+            int w = (int)args[2].asInteger();
+            int fg = (int)args[3].asInteger();
+            int bg = (int)args[4].asInteger();
+            std::cout << "\x1b[" << y << ";" << x << "H\x1b[38;5;" << fg << "m\x1b[48;5;" << bg << "m";
+            for (int i = 0; i < w; i++) std::cout << "\xe2\x94\x80";
+            return FValue::nil();
+        }, "ui.draw_hline_bg"));
+
+        uiMod->entries["draw_corner_tl"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() < 4) throw std::runtime_error("ui.draw_corner_tl(x, y, fg, bg)");
+            int x = (int)args[0].asInteger(), y = (int)args[1].asInteger();
+            int fg = (int)args[2].asInteger(), bg = (int)args[3].asInteger();
+            std::cout << "\x1b[" << y << ";" << x << "H\x1b[38;5;" << fg << "m\x1b[48;5;" << bg << "m\xe2\x94\x8c";
+            return FValue::nil();
+        }, "ui.draw_corner_tl"));
+
+        uiMod->entries["draw_corner_tr"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() < 4) throw std::runtime_error("ui.draw_corner_tr(x, y, fg, bg)");
+            int x = (int)args[0].asInteger(), y = (int)args[1].asInteger();
+            int fg = (int)args[2].asInteger(), bg = (int)args[3].asInteger();
+            std::cout << "\x1b[" << y << ";" << x << "H\x1b[38;5;" << fg << "m\x1b[48;5;" << bg << "m\xe2\x94\x90";
+            return FValue::nil();
+        }, "ui.draw_corner_tr"));
+
+        uiMod->entries["draw_corner_bl"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() < 4) throw std::runtime_error("ui.draw_corner_bl(x, y, fg, bg)");
+            int x = (int)args[0].asInteger(), y = (int)args[1].asInteger();
+            int fg = (int)args[2].asInteger(), bg = (int)args[3].asInteger();
+            std::cout << "\x1b[" << y << ";" << x << "H\x1b[38;5;" << fg << "m\x1b[48;5;" << bg << "m\xe2\x94\x94";
+            return FValue::nil();
+        }, "ui.draw_corner_bl"));
+
+        uiMod->entries["draw_corner_br"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() < 4) throw std::runtime_error("ui.draw_corner_br(x, y, fg, bg)");
+            int x = (int)args[0].asInteger(), y = (int)args[1].asInteger();
+            int fg = (int)args[2].asInteger(), bg = (int)args[3].asInteger();
+            std::cout << "\x1b[" << y << ";" << x << "H\x1b[38;5;" << fg << "m\x1b[48;5;" << bg << "m\xe2\x94\x98";
+            return FValue::nil();
+        }, "ui.draw_corner_br"));
+
+        uiMod->entries["draw_tee_l"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() < 4) throw std::runtime_error("ui.draw_tee_l(x, y, fg, bg)");
+            int x = (int)args[0].asInteger(), y = (int)args[1].asInteger();
+            int fg = (int)args[2].asInteger(), bg = (int)args[3].asInteger();
+            std::cout << "\x1b[" << y << ";" << x << "H\x1b[38;5;" << fg << "m\x1b[48;5;" << bg << "m\xe2\x94\x9c";
+            return FValue::nil();
+        }, "ui.draw_tee_l"));
+
+        uiMod->entries["draw_tee_r"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+            if (args.size() < 4) throw std::runtime_error("ui.draw_tee_r(x, y, fg, bg)");
+            int x = (int)args[0].asInteger(), y = (int)args[1].asInteger();
+            int fg = (int)args[2].asInteger(), bg = (int)args[3].asInteger();
+            std::cout << "\x1b[" << y << ";" << x << "H\x1b[38;5;" << fg << "m\x1b[48;5;" << bg << "m\xe2\x94\xa4";
+            return FValue::nil();
+        }, "ui.draw_tee_r"));
+
         uiMod->entries["get_size"] = FValue::obj(new GCNative([](const std::vector<FValue>&) -> FValue {
             struct winsize ws;
             if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
@@ -1644,20 +1717,63 @@ void ForgeVM::defineModules() {
             char c = 0;
             if (read(STDIN_FILENO, &c, 1) == 1) {
                 if (c == 27) {
-                    char seq[3] = {0, 0, 0};
-                    read(STDIN_FILENO, &seq[0], 1);
-                    read(STDIN_FILENO, &seq[1], 1);
-                    if (seq[0] == '[') {
-                        auto* m = new GCMap();
-                        m->entries["type"] = FValue::obj(new GCString("arrow"));
-                        switch (seq[1]) {
-                            case 'A': m->entries["key"] = FValue::obj(new GCString("up")); break;
-                            case 'B': m->entries["key"] = FValue::obj(new GCString("down")); break;
-                            case 'C': m->entries["key"] = FValue::obj(new GCString("right")); break;
-                            case 'D': m->entries["key"] = FValue::obj(new GCString("left")); break;
-                            default: m->entries["key"] = FValue::obj(new GCString("unknown")); break;
+                    char seq[8] = {0};
+                    int n = read(STDIN_FILENO, &seq[0], 7);
+                    if (n >= 1 && seq[0] == '[') {
+                        if (n >= 2 && seq[1] >= 'A' && seq[1] <= 'D') {
+                            auto* m = new GCMap();
+                            m->entries["type"] = FValue::obj(new GCString("arrow"));
+                            switch (seq[1]) {
+                                case 'A': m->entries["key"] = FValue::obj(new GCString("up")); break;
+                                case 'B': m->entries["key"] = FValue::obj(new GCString("down")); break;
+                                case 'C': m->entries["key"] = FValue::obj(new GCString("right")); break;
+                                case 'D': m->entries["key"] = FValue::obj(new GCString("left")); break;
+                            }
+                            if (n >= 4 && seq[2] == ';' && seq[3] == '5') {
+                                m->entries["ctrl"] = FValue::boolean(true);
+                            }
+                            return FValue::obj(m);
                         }
-                        return FValue::obj(m);
+                        if (n >= 2 && seq[1] >= '1' && seq[1] <= '6') {
+                            char final = (n >= 3) ? seq[2] : 0;
+                            if (n >= 3 && seq[2] == '~') {
+                                auto* m = new GCMap();
+                                m->entries["type"] = FValue::obj(new GCString("special"));
+                                switch (seq[1]) {
+                                    case '1': m->entries["key"] = FValue::obj(new GCString("home")); break;
+                                    case '2': m->entries["key"] = FValue::obj(new GCString("insert")); break;
+                                    case '3': m->entries["key"] = FValue::obj(new GCString("delete")); break;
+                                    case '4': m->entries["key"] = FValue::obj(new GCString("end")); break;
+                                    case '5': m->entries["key"] = FValue::obj(new GCString("pageup")); break;
+                                    case '6': m->entries["key"] = FValue::obj(new GCString("pagedown")); break;
+                                    default: m->entries["key"] = FValue::obj(new GCString("unknown")); break;
+                                }
+                                return FValue::obj(m);
+                            }
+                            if (n >= 3 && (seq[2] == 'H' || seq[2] == 'F')) {
+                                auto* m = new GCMap();
+                                m->entries["type"] = FValue::obj(new GCString("special"));
+                                if (seq[2] == 'H') m->entries["key"] = FValue::obj(new GCString("home"));
+                                else m->entries["key"] = FValue::obj(new GCString("end"));
+                                return FValue::obj(m);
+                            }
+                        }
+                        if (n >= 1 && seq[0] == 'O') {
+                            auto* m = new GCMap();
+                            m->entries["type"] = FValue::obj(new GCString("special"));
+                            if (n >= 2) {
+                                switch (seq[1]) {
+                                    case 'H': m->entries["key"] = FValue::obj(new GCString("home")); break;
+                                    case 'F': m->entries["key"] = FValue::obj(new GCString("end")); break;
+                                    case 'P': m->entries["key"] = FValue::obj(new GCString("insert")); break;
+                                    case 'Q': m->entries["key"] = FValue::obj(new GCString("pageup")); break;
+                                    case 'R': m->entries["key"] = FValue::obj(new GCString("pagedown")); break;
+                                    case 'S': m->entries["key"] = FValue::obj(new GCString("delete")); break;
+                                    default: m->entries["key"] = FValue::obj(new GCString("unknown")); break;
+                                }
+                            }
+                            return FValue::obj(m);
+                        }
                     }
                     auto* m = new GCMap();
                     m->entries["type"] = FValue::obj(new GCString("escape"));

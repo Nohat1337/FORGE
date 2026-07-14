@@ -1,4 +1,4 @@
-// Forge Studio - Terminal IDE for Forge Language
+// Forge Studio v2 - Terminal IDE for Forge Language
 // Written in Forge, runs on FVM
 
 import "ui"
@@ -7,12 +7,11 @@ import "io"
 import "path"
 
 // ============================================================
-// Theme / Settings
+// Theme / Colors
 // ============================================================
 
 let SETTINGS_FILE = ".forge-studio-config"
 
-// Colors (256-color palette)
 let THEME_FG = 252
 let THEME_BG = 235
 let THEME_GUTTER = 243
@@ -32,6 +31,15 @@ let THEME_IDENT = 252
 let THEME_PANEL_BG = 236
 let THEME_PANEL_SEL = 75
 let THEME_PANEL_TITLE = 255
+let THEME_LINE_HL = 237
+let THEME_SEL_BG = 24
+let THEME_MATCH_BG = 22
+let THEME_FIND_BAR = 234
+let THEME_FIND_ACTIVE = 166
+let THEME_BORDER_FG = 240
+let THEME_BORDER_DOUBLE = 238
+let THEME_DIRECTORY = 39
+let THEME_FILE_FG = 248
 
 // Editor settings
 let SETTING_TAB_WIDTH = 4
@@ -54,13 +62,25 @@ let mode = "normal"
 let message = ""
 let command_buffer = ""
 let panel_visible = true
-let panel_width = 22
+let panel_width = 24
 let active_panel = "files"
 let file_list = []
 let file_list_selected = 0
 let file_list_scroll = 0
 let settings_open = false
 let settings_selected = 0
+let clipboard = ""
+let clipboard_is_line = false
+let undo_stack = []
+let redo_stack = []
+let find_mode = false
+let find_buffer = ""
+let find_direction = 1
+let goto_mode = false
+let goto_buffer = ""
+let last_find_line = -1
+let last_find_col = -1
+let should_quit = false
 
 // ============================================================
 // File System Helpers
@@ -68,7 +88,7 @@ let settings_selected = 0
 
 fn list_directory(dir) {
     let result = []
-    let output = os.capture("ls " + dir)
+    let output = os.capture("ls -1 " + dir)
     if (output != "") {
         let current = ""
         let i = 0
@@ -108,7 +128,13 @@ fn refresh_file_list() {
 // ============================================================
 
 fn load_file(filepath) {
-    let content = io.read(filepath)
+    let content = ""
+    try {
+        content = io.read(filepath)
+    } catch (e) {
+        message = "Error reading: " + filepath
+        return
+    }
     filename = filepath
     lines = []
     let current = ""
@@ -130,6 +156,11 @@ fn load_file(filepath) {
         lines.push("")
     }
     modified = false
+    cursor_line = 0
+    cursor_col = 0
+    scroll_top = 0
+    undo_stack = []
+    redo_stack = []
     message = "Opened: " + filepath
 }
 
@@ -159,7 +190,167 @@ fn new_file() {
     cursor_col = 0
     scroll_top = 0
     modified = false
+    undo_stack = []
+    redo_stack = []
     message = "New file"
+}
+
+// ============================================================
+// Undo / Redo
+// ============================================================
+
+fn push_undo_snapshot() {
+    let snapshot = []
+    let i = 0
+    while (i < len(lines)) {
+        snapshot.push(lines[i])
+        i = i + 1
+    }
+    let entry = []
+    entry.push(snapshot)
+    entry.push(cursor_line)
+    entry.push(cursor_col)
+    undo_stack.push(entry)
+    if (len(undo_stack) > 200) {
+        undo_stack = [undo_stack[len(undo_stack) - 200]]
+    }
+    redo_stack = []
+}
+
+fn undo() {
+    if (len(undo_stack) == 0) {
+        message = "Nothing to undo"
+        return
+    }
+    let entry = undo_stack[len(undo_stack) - 1]
+    let snapshot = entry[0]
+    let old_line = entry[1]
+    let old_col = entry[2]
+    undo_stack.pop()
+
+    let current = []
+    let i = 0
+    while (i < len(lines)) {
+        current.push(lines[i])
+        i = i + 1
+    }
+    let redo_entry = []
+    redo_entry.push(current)
+    redo_entry.push(cursor_line)
+    redo_entry.push(cursor_col)
+    redo_stack.push(redo_entry)
+
+    lines = snapshot
+    cursor_line = old_line
+    cursor_col = old_col
+    clamp_cursor()
+    modified = true
+    message = "Undo"
+}
+
+fn redo() {
+    if (len(redo_stack) == 0) {
+        message = "Nothing to redo"
+        return
+    }
+    let entry = redo_stack[len(redo_stack) - 1]
+    let snapshot = entry[0]
+    let old_line = entry[1]
+    let old_col = entry[2]
+    redo_stack.pop()
+
+    let current = []
+    let i = 0
+    while (i < len(lines)) {
+        current.push(lines[i])
+        i = i + 1
+    }
+    let undo_entry = []
+    undo_entry.push(current)
+    undo_entry.push(cursor_line)
+    undo_entry.push(cursor_col)
+    undo_stack.push(undo_entry)
+
+    lines = snapshot
+    cursor_line = old_line
+    cursor_col = old_col
+    clamp_cursor()
+    modified = true
+    message = "Redo"
+}
+
+// ============================================================
+// Clipboard
+// ============================================================
+
+fn clipboard_copy_selection() {
+    if (cursor_line < 0) { return }
+    let start_l = cursor_line
+    let start_c = cursor_col
+    let end_l = cursor_line
+    let end_c = cursor_col
+    let text = ""
+    if (start_l == end_l) {
+        if (start_c < end_c) {
+            text = substring(lines[start_l], start_c, end_c)
+        } else {
+            text = substring(lines[start_l], end_c, start_c)
+        }
+    } else {
+        if (start_l > end_l) {
+            let tl = start_l
+            let tc = start_c
+            start_l = end_l
+            start_c = end_c
+            end_l = tl
+            end_c = tc
+        }
+        text = substring(lines[start_l], start_c, len(lines[start_l])) + "\n"
+        let i = start_l + 1
+        while (i < end_l) {
+            text = text + lines[i] + "\n"
+            i = i + 1
+        }
+        text = text + substring(lines[end_l], 0, end_c)
+    }
+    clipboard = text
+    message = "Copied " + str(len(text)) + " chars"
+}
+
+fn clipboard_cut_selection() {
+    clipboard_copy_selection()
+    let line = lines[cursor_line]
+    let before = substring(line, 0, cursor_col)
+    let after = ""
+    if (cursor_col < len(line)) {
+        after = substring(line, cursor_col, len(line))
+    }
+    lines[cursor_line] = before + after
+    modified = true
+    message = "Cut"
+}
+
+fn clipboard_paste() {
+    if (clipboard == "") {
+        message = "Clipboard empty"
+        return
+    }
+    push_undo_snapshot()
+    if (len(clipboard) == 1) {
+        insert_char(clipboard)
+    } else {
+        let i = 0
+        while (i < len(clipboard)) {
+            let ch = clipboard[i]
+            if (ch == "\n") {
+                insert_newline()
+            } else {
+                insert_char(ch)
+            }
+            i = i + 1
+        }
+    }
+    message = "Pasted"
 }
 
 // ============================================================
@@ -211,7 +402,16 @@ fn str_to_int(s) {
         let ch = s[i]
         if (ch >= "0") {
             if (ch <= "9") {
-                result = result * 10 + (ch[0] - "0"[0])
+                if (ch == "0") { result = result * 10 }
+                if (ch == "1") { result = result * 10 + 1 }
+                if (ch == "2") { result = result * 10 + 2 }
+                if (ch == "3") { result = result * 10 + 3 }
+                if (ch == "4") { result = result * 10 + 4 }
+                if (ch == "5") { result = result * 10 + 5 }
+                if (ch == "6") { result = result * 10 + 6 }
+                if (ch == "7") { result = result * 10 + 7 }
+                if (ch == "8") { result = result * 10 + 8 }
+                if (ch == "9") { result = result * 10 + 9 }
             }
         }
         i = i + 1
@@ -263,6 +463,9 @@ fn is_keyword(word) {
     if (word == "and") { return true }
     if (word == "or") { return true }
     if (word == "not") { return true }
+    if (word == "struct") { return true }
+    if (word == "impl") { return true }
+    if (word == "enum") { return true }
     return false
 }
 
@@ -434,6 +637,85 @@ fn move_end() {
     cursor_col = len(lines[cursor_line])
 }
 
+fn move_word_right() {
+    let line = lines[cursor_line]
+    if (cursor_col >= len(line)) {
+        if (cursor_line < len(lines) - 1) {
+            cursor_line = cursor_line + 1
+            cursor_col = 0
+        }
+        return
+    }
+    let i = cursor_col
+    while (i < len(line)) {
+        let ch = line[i]
+        if (ch == " " || ch == "\t") {
+            i = i + 1
+        } else {
+            break
+        }
+    }
+    if (i < len(line)) {
+        let ch = line[i]
+        if ((ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || ch == "_") {
+            while (i < len(line)) {
+                let nc = line[i]
+                if ((nc >= "a" && nc <= "z") || (nc >= "A" && nc <= "Z") || (nc >= "0" && nc <= "9") || nc == "_") {
+                    i = i + 1
+                } else {
+                    break
+                }
+            }
+        } else if (ch >= "0" && ch <= "9") {
+            while (i < len(line)) {
+                let nc = line[i]
+                if ((nc >= "0" && nc <= "9") || nc == ".") {
+                    i = i + 1
+                } else {
+                    break
+                }
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    cursor_col = i
+}
+
+fn move_word_left() {
+    if (cursor_col > 0) {
+        let i = cursor_col - 1
+        let line = lines[cursor_line]
+        while (i > 0) {
+            let ch = line[i]
+            if (ch == " " || ch == "\t") {
+                i = i - 1
+            } else {
+                break
+            }
+        }
+        if (i > 0) {
+            let ch = line[i]
+            if ((ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || (ch >= "0" && ch <= "9") || ch == "_") {
+                while (i > 0) {
+                    let nc = line[i - 1]
+                    if ((nc >= "a" && nc <= "z") || (nc >= "A" && nc <= "Z") || (nc >= "0" && nc <= "9") || nc == "_") {
+                        i = i - 1
+                    } else {
+                        break
+                    }
+                }
+            } else {
+                i = i - 1
+            }
+        }
+        cursor_col = i
+    } else if (cursor_line > 0) {
+        cursor_line = cursor_line - 1
+        cursor_col = len(lines[cursor_line])
+    }
+}
+
 fn page_up() {
     cursor_line = cursor_line - 20
     if (cursor_line < 0) {
@@ -515,6 +797,146 @@ fn insert_newline() {
     modified = true
 }
 
+fn duplicate_line() {
+    push_undo_snapshot()
+    let dup = lines[cursor_line]
+    lines.push("")
+    let i = len(lines) - 2
+    while (i >= cursor_line) {
+        lines[i + 1] = lines[i]
+        i = i - 1
+    }
+    lines[cursor_line + 1] = dup
+    cursor_line = cursor_line + 1
+    modified = true
+    message = "Line duplicated"
+}
+
+fn toggle_comment() {
+    push_undo_snapshot()
+    let line = lines[cursor_line]
+    let trimmed = ""
+    let leading = 0
+    let i = 0
+    while (i < len(line)) {
+        let ch = line[i]
+        if (ch == " " || ch == "\t") {
+            leading = leading + 1
+            i = i + 1
+        } else {
+            break
+        }
+    }
+    if (i < len(line) - 1) {
+        if (line[i] == "/" && line[i + 1] == "/") {
+            let without_comment = ""
+            let j = i + 2
+            while (j < len(line)) {
+                without_comment = without_comment + line[j]
+                j = j + 1
+            }
+            lines[cursor_line] = without_comment
+            message = "Uncommented"
+            return
+        }
+    }
+    lines[cursor_line] = line + "//"
+    message = "Commented"
+}
+
+fn delete_line() {
+    push_undo_snapshot()
+    if (len(lines) == 1) {
+        lines[0] = ""
+        cursor_col = 0
+    } else {
+        let i = cursor_line
+        while (i < len(lines) - 1) {
+            lines[i] = lines[i + 1]
+            i = i + 1
+        }
+        lines.pop()
+        clamp_cursor()
+    }
+    modified = true
+    message = "Line deleted"
+}
+
+fn find_next() {
+    if (find_buffer == "") {
+        return
+    }
+    let start_line = cursor_line
+    let start_col = cursor_col + 1
+    let i = 0
+    while (i < len(lines)) {
+        let line_idx = (start_line + i) % len(lines)
+        let search_col = 0
+        if (i == 0) {
+            search_col = start_col
+        }
+        let line = lines[line_idx]
+        if (search_col < len(line)) {
+            let found = false
+            let j = search_col
+            while (j <= len(line) - len(find_buffer)) {
+                let matched = true
+                let k = 0
+                while (k < len(find_buffer)) {
+                    if (line[j + k] != find_buffer[k]) {
+                        matched = false
+                        k = len(find_buffer)
+                    }
+                    k = k + 1
+                }
+                if (matched) {
+                    cursor_line = line_idx
+                    cursor_col = j
+                    clamp_cursor()
+                    message = "Found at line " + str(cursor_line + 1)
+                    return
+                }
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    message = "Not found: " + find_buffer
+}
+
+fn goto_line_num() {
+    let num = str_to_int(goto_buffer)
+    if (num >= 1 && num <= len(lines)) {
+        cursor_line = num - 1
+        cursor_col = 0
+        clamp_cursor()
+        message = "Line " + str(num)
+    } else {
+        message = "Invalid line: " + goto_buffer
+    }
+}
+
+// ============================================================
+// Rendering - Box Drawing Helpers
+// ============================================================
+
+fn draw_box(x, y, w, h, fg, bg) {
+    ui.draw_corner_tl(x, y, fg, bg)
+    ui.draw_hline_bg(x + 1, y, w - 2, fg, bg)
+    ui.draw_corner_tr(x + w - 1, y, fg, bg)
+    let i = 1
+    while (i < h - 1) {
+        ui.draw_text(x, y + i, " ", fg, bg, false)
+        ui.draw_vline(x + 1, y + i, 1, bg)
+        ui.draw_text(x + w - 1, y + i, " ", fg, bg, false)
+        ui.draw_vline(x + w - 1, y + i, 1, bg)
+        i = i + 1
+    }
+    ui.draw_corner_bl(x, y + h - 1, fg, bg)
+    ui.draw_hline_bg(x + 1, y + h - 1, w - 2, fg, bg)
+    ui.draw_corner_br(x + w - 1, y + h - 1, fg, bg)
+}
+
 // ============================================================
 // Rendering - Title Bar
 // ============================================================
@@ -523,11 +945,12 @@ fn render_title_bar(term_w) {
     ui.draw_rect(1, 1, term_w, 1, THEME_TITLE_BG)
     let title = " Forge Studio "
     ui.draw_text(1, 1, title, THEME_PANEL_TITLE, THEME_TITLE_BG, true)
-    let hints = " Ctrl+S:Save  Ctrl+Q:Quit  Ctrl+N:New  Ctrl+O:Open  Ctrl+,:Settings "
-    let hx = term_w - len(hints)
-    if (hx > len(title) + 2) {
+    let hints = " Ctrl+S Save | Ctrl+Z Undo | Ctrl+F Find | Ctrl+Q Quit | Ctrl+, Settings "
+    let hx = term_w - len(hints) + 1
+    if (hx > len(title) + 3) {
         ui.draw_text(hx, 1, hints, THEME_COMMENT, THEME_TITLE_BG, false)
     }
+    ui.draw_hline_bg(1, 2, term_w, THEME_BORDER_FG, THEME_BG)
 }
 
 // ============================================================
@@ -536,15 +959,40 @@ fn render_title_bar(term_w) {
 
 fn render_status_bar(term_w, term_h) {
     ui.draw_rect(1, term_h, term_w, 1, THEME_STATUS_BG)
-    let mode_str = "[NORMAL]"
+
+    let mode_str = ""
+    if (mode == "normal") { mode_str = " NORMAL " }
+    if (mode == "command") { mode_str = " COMMAND " }
+    if (mode == "panel") { mode_str = " FILES " }
+    if (mode == "insert") { mode_str = " INSERT " }
+
     let file_str = filename
     if (file_str == "") { file_str = "[No Name]" }
-    let mod_str = " "
-    if (modified) { mod_str = "+" }
+
+    let mod_str = ""
+    if (modified) { mod_str = " [+]" }
+
     let pos_str = "Ln " + str(cursor_line + 1) + " Col " + str(cursor_col + 1)
     let total_str = str(len(lines)) + " lines"
-    let left = mode_str + " " + file_str + mod_str + " | " + pos_str + " | " + total_str
+
+    let left = mode_str + " " + file_str + mod_str
+    let right = pos_str + "  " + total_str + " "
+
     ui.draw_text(1, term_h, left, THEME_STATUS_FG, THEME_STATUS_BG, true)
+
+    let right_x = term_w - len(right)
+    let mid_start = len(left) + 1
+    let mid_len = right_x - mid_start
+    if (mid_len > 0) {
+        let mid = ""
+        let d = 0
+        while (d < mid_len) {
+            mid = mid + " "
+            d = d + 1
+        }
+        ui.draw_text(mid_start, term_h, mid, THEME_STATUS_FG, THEME_STATUS_BG, false)
+    }
+    ui.draw_text(right_x, term_h, right, THEME_STATUS_FG, THEME_STATUS_BG, false)
 }
 
 // ============================================================
@@ -559,47 +1007,56 @@ fn render_message_bar(term_w, term_h) {
 }
 
 // ============================================================
-// Rendering - File Explorer (left panel)
+// Rendering - File Explorer
 // ============================================================
 
 fn render_file_explorer(px, py, pw, ph) {
-    ui.draw_rect(px, py, pw, ph, THEME_PANEL_BG)
-    let header = " FILES "
-    let hx = px + 1
-    ui.draw_text(hx, py, header, THEME_PANEL_TITLE, THEME_TITLE_BG, true)
+    draw_box(px, py, pw, ph, THEME_BORDER_FG, THEME_BORDER)
+    ui.draw_text(px + 2, py, " FILES ", THEME_PANEL_TITLE, THEME_BORDER, true)
 
-    let max_show = ph - 1
+    let max_show = ph - 2
     let i = 0
     let vi = 0
     while (i < len(file_list)) {
-        let skip = false
-        if (i < file_list_scroll) {
-            skip = true
-        }
-        if (skip == false) {
+        if (i >= file_list_scroll) {
             if (vi < max_show) {
                 let fname = file_list[i]
-                let prefix = "  "
+                let icon = "  "
+                if (is_directory(fname)) {
+                    icon = THEME_DIRECTORY
+                }
+                let prefix = " "
                 if (fname == filename) {
-                    prefix = "> "
+                    prefix = ">"
                 }
                 let display = prefix + fname
-                if (len(display) > pw - 1) {
-                    display = substring(display, 0, pw - 1)
+                if (len(display) > pw - 3) {
+                    display = substring(display, 0, pw - 3)
                 }
-                let color = THEME_IDENT
-                if (i == file_list_selected) {
+                let color = THEME_FILE_FG
+                let is_sel = (i == file_list_selected)
+                if (is_sel) {
                     color = THEME_PANEL_SEL
                 }
-                ui.draw_text(px, py + 1 + vi, display, color, THEME_PANEL_BG, i == file_list_selected)
+                if (is_directory(fname)) {
+                    color = THEME_DIRECTORY
+                }
+                if (fname == filename) {
+                    color = THEME_FIND_ACTIVE
+                }
+                ui.draw_rect(px + 1, py + 1 + vi, pw - 2, 1, is_sel ? THEME_PANEL_SEL : THEME_PANEL_BG)
+                ui.draw_text(px + 1, py + 1 + vi, display, color, is_sel ? THEME_PANEL_SEL : THEME_PANEL_BG, is_sel)
                 vi = vi + 1
             }
         }
         i = i + 1
     }
     if (len(file_list) == 0) {
-        ui.draw_text(px + 1, py + 1, "(empty dir)", THEME_COMMENT, THEME_PANEL_BG, false)
+        ui.draw_text(px + 2, py + 2, "(empty dir)", THEME_COMMENT, THEME_PANEL_BG, false)
     }
+
+    let bottom_y = py + ph - 1
+    ui.draw_text(px + 1, bottom_y, " r:Refresh Enter:Open ", THEME_COMMENT, THEME_BORDER, false)
 }
 
 // ============================================================
@@ -618,6 +1075,12 @@ fn render_editor(ex, ey, ew, eh) {
         let line_idx = scroll_top + row
         let y = ey + row
 
+        let is_current_line = (line_idx == cursor_line)
+
+        if (is_current_line) {
+            ui.draw_rect(ex, y, ew, 1, THEME_LINE_HL)
+        }
+
         if (line_idx < len(lines)) {
             if (SETTING_SHOW_GUTTER) {
                 let num_str = str(line_idx + 1)
@@ -625,10 +1088,10 @@ fn render_editor(ex, ey, ew, eh) {
                     num_str = " " + num_str
                 }
                 let num_color = THEME_LINE_NUM
-                if (line_idx == cursor_line) {
-                    num_color = THEME_FG
+                if (is_current_line) {
+                    num_color = THEME_CURSOR_BG
                 }
-                ui.draw_text(ex, y, num_str, num_color, THEME_BG, line_idx == cursor_line)
+                ui.draw_text(ex, y, num_str, num_color, is_current_line ? THEME_LINE_HL : THEME_BG, is_current_line)
             }
 
             let line_text = lines[line_idx]
@@ -637,7 +1100,6 @@ fn render_editor(ex, ey, ew, eh) {
             let display_offset = scroll_left
 
             let t = 0
-            let char_pos = 0
             let done_tokens = false
             while (done_tokens == false) {
                 if (t >= len(tokens)) {
@@ -658,19 +1120,18 @@ fn render_editor(ex, ey, ew, eh) {
                         } else {
                             display_offset = display_offset - len(ttext)
                             t = t + 1
-                            char_pos = char_pos + len(ttext)
                         }
                     } else {
                         let avail = ex + ew - 1 - col
-                        if (avail < 0) { avail = 0 }
                         if (len(display_text) > avail) {
                             display_text = substring(display_text, 0, avail)
                         }
-                        if (len(display_text) > 0) {
-                            ui.draw_text(col, y, display_text, color, THEME_BG, false)
-                            col = col + len(display_text)
+                        let bg = THEME_BG
+                        if (is_current_line) {
+                            bg = THEME_LINE_HL
                         }
-                        char_pos = char_pos + len(ttext)
+                        ui.draw_text(col, y, display_text, color, bg, false)
+                        col = col + len(display_text)
                         t = t + 1
                     }
                 }
@@ -679,12 +1140,12 @@ fn render_editor(ex, ey, ew, eh) {
             if (line_idx == cursor_line) {
                 let cx = code_x + cursor_col - scroll_left
                 if (cx >= code_x) {
-                    if (cx < ex + ew) {
+                    if (cx < ex + ew - 1) {
                         let ch_char = " "
                         if (cursor_col < len(line_text)) {
                             ch_char = line_text[cursor_col]
                         }
-                        ui.draw_text(cx, y, ch_char, THEME_CURSOR, THEME_CURSOR_BG, false)
+                        ui.draw_text(cx, y, ch_char, THEME_CURSOR, THEME_CURSOR_BG, true)
                     }
                 }
             }
@@ -694,51 +1155,68 @@ fn render_editor(ex, ey, ew, eh) {
 }
 
 // ============================================================
-// Rendering - Settings Panel (overlay)
+// Rendering - Settings Panel
 // ============================================================
 
 fn render_settings(term_w, term_h) {
-    let sw = 42
-    let sh = 14
+    let sw = 44
+    let sh = 12
     let sx = (term_w - sw) / 2
     let sy = (term_h - sh) / 2
 
-    ui.draw_rect(sx, sy, sw, sh, THEME_PANEL_BG)
-    ui.draw_rect(sx, sy, sw, 1, THEME_STATUS_BG)
-    ui.draw_text(sx + 1, sy, " SETTINGS ", THEME_PANEL_TITLE, THEME_STATUS_BG, true)
+    draw_box(sx, sy, sw, sh, THEME_BORDER_FG, THEME_FIND_BAR)
+    ui.draw_rect(sx + 1, sy + 1, sw - 2, 1, THEME_STATUS_BG)
+    ui.draw_text(sx + 2, sy, " SETTINGS ", THEME_PANEL_TITLE, THEME_STATUS_BG, true)
 
     let items = []
-    items.push("Tab Width:       " + str(SETTING_TAB_WIDTH))
-    items.push("Show Gutter:     " + str_bool(SETTING_SHOW_GUTTER))
-    items.push("Syntax Highlight:" + str_bool(SETTING_SYNTAX_HL))
-    items.push("Background:      " + str(THEME_BG))
-    items.push("")
-    items.push("[Enter] Toggle/Change")
-    items.push("[Esc]   Close")
-    items.push("[S]     Save Settings")
+    items.push("Tab Width:        " + str(SETTING_TAB_WIDTH))
+    items.push("Show Gutter:      " + str_bool(SETTING_SHOW_GUTTER))
+    items.push("Syntax Highlight: " + str_bool(SETTING_SYNTAX_HL))
+    items.push("Background:       " + str(THEME_BG))
 
     let i = 0
     while (i < len(items)) {
-        let color = THEME_IDENT
-        if (i == settings_selected) {
-            color = THEME_PANEL_SEL
-        }
+        let color = THEME_FILE_FG
         let prefix = "  "
         if (i == settings_selected) {
+            color = THEME_FIND_ACTIVE
             prefix = "> "
         }
         let display = prefix + items[i]
-        if (len(display) > sw - 2) {
-            display = substring(display, 0, sw - 2)
-        }
-        ui.draw_text(sx + 1, sy + 1 + i, display, color, THEME_PANEL_BG, i == settings_selected)
+        ui.draw_text(sx + 2, sy + 2 + i, display, color, THEME_FIND_BAR, i == settings_selected)
         i = i + 1
     }
+
+    ui.draw_text(sx + 2, sy + sh - 3, "[Enter] Toggle  [j/k] Navigate", THEME_COMMENT, THEME_FIND_BAR, false)
+    ui.draw_text(sx + 2, sy + sh - 2, "[s] Save Settings  [Esc] Close", THEME_COMMENT, THEME_FIND_BAR, false)
 }
 
 fn str_bool(val) {
     if (val) { return "ON" }
     return "OFF"
+}
+
+// ============================================================
+// Rendering - Find Bar
+// ============================================================
+
+fn render_find_bar(term_w, term_h) {
+    if (find_mode) {
+        let bar_y = term_h - 2
+        ui.draw_rect(1, bar_y, term_w, 1, THEME_FIND_BAR)
+        let prompt = " Find: " + find_buffer + "_"
+        ui.draw_text(1, bar_y, prompt, THEME_FIND_ACTIVE, THEME_FIND_BAR, false)
+        let hint = " [Enter]Next [Esc]Close "
+        ui.draw_text(term_w - len(hint), bar_y, hint, THEME_COMMENT, THEME_FIND_BAR, false)
+    }
+    if (goto_mode) {
+        let bar_y = term_h - 2
+        ui.draw_rect(1, bar_y, term_w, 1, THEME_FIND_BAR)
+        let prompt = " Go to line: " + goto_buffer + "_"
+        ui.draw_text(1, bar_y, prompt, THEME_FIND_ACTIVE, THEME_FIND_BAR, false)
+        let hint = " [Enter]Go [Esc]Cancel "
+        ui.draw_text(term_w - len(hint), bar_y, hint, THEME_COMMENT, THEME_FIND_BAR, false)
+    }
 }
 
 // ============================================================
@@ -793,29 +1271,33 @@ fn handle_settings_input(key) {
         if (sc == 115) {
             save_settings()
         }
-        if (sc == 107) {
+    }
+    if (st == "arrow") {
+        let sk = key["key"]
+        if (sk == "up" || sk == "k") {
             settings_selected = settings_selected - 1
             if (settings_selected < 0) {
-                settings_selected = 7
+                settings_selected = 3
             }
         }
-        if (sc == 106) {
+        if (sk == "down" || sk == "j") {
             settings_selected = settings_selected + 1
-            if (settings_selected > 7) {
+            if (settings_selected > 3) {
                 settings_selected = 0
             }
         }
     }
-    if (st == "arrow") {
-        if (key["key"] == "up") {
+    if (st == "special") {
+        let sk = key["key"]
+        if (sk == "up") {
             settings_selected = settings_selected - 1
             if (settings_selected < 0) {
-                settings_selected = 7
+                settings_selected = 3
             }
         }
-        if (key["key"] == "down") {
+        if (sk == "down") {
             settings_selected = settings_selected + 1
-            if (settings_selected > 7) {
+            if (settings_selected > 3) {
                 settings_selected = 0
             }
         }
@@ -872,6 +1354,11 @@ fn execute_command() {
         message = ":q quit | :w save | :e open | :settings | :toggle panel"
         return
     }
+    if (command_buffer == "d") {
+        delete_line()
+        mode = "normal"
+        return
+    }
     message = "Unknown: " + command_buffer + " (:help for commands)"
 }
 
@@ -889,7 +1376,7 @@ fn handle_panel_input(key) {
         return
     }
 
-    if (pt == "arrow") {
+    if (pt == "arrow" || pt == "special") {
         if (pk == "up") {
             if (file_list_selected > 0) {
                 file_list_selected = file_list_selected - 1
@@ -900,15 +1387,27 @@ fn handle_panel_input(key) {
                 file_list_selected = file_list_selected + 1
             }
         }
+        if (pk == "pageup") {
+            file_list_selected = file_list_selected - 10
+            if (file_list_selected < 0) {
+                file_list_selected = 0
+            }
+        }
+        if (pk == "pagedown") {
+            file_list_selected = file_list_selected + 10
+            if (file_list_selected >= len(file_list)) {
+                file_list_selected = len(file_list) - 1
+            }
+        }
     }
 
     if (pt == "char") {
-        if (pc == 107) {
+        if (pc == 107 || pc == 75) {
             if (file_list_selected > 0) {
                 file_list_selected = file_list_selected - 1
             }
         }
-        if (pc == 106) {
+        if (pc == 106 || pc == 74) {
             if (file_list_selected < len(file_list) - 1) {
                 file_list_selected = file_list_selected + 1
             }
@@ -916,8 +1415,13 @@ fn handle_panel_input(key) {
         if (pc == 13 || pc == 10) {
             if (file_list_selected < len(file_list)) {
                 let sel = file_list[file_list_selected]
-                load_file(sel)
-                mode = "normal"
+                if (is_directory(sel)) {
+                    os.execute("cd " + sel)
+                    refresh_file_list()
+                } else {
+                    load_file(sel)
+                    mode = "normal"
+                }
             }
         }
         if (pc == 114) {
@@ -928,50 +1432,97 @@ fn handle_panel_input(key) {
 }
 
 // ============================================================
-// Input - Normal Mode (main editor)
+// Input - Find / Goto
 // ============================================================
 
-fn handle_key(key) {
+fn handle_find_input(key) {
     let kt = key["type"]
     let kc = key["key"]
     let cd = key["code"]
 
-    if (mode == "command") {
-        if (kt == "escape") {
-            mode = "normal"
-            command_buffer = ""
-            message = ""
-            return
-        }
-
-        if (kt == "char") {
-            if (cd == 13 || cd == 10) {
-                mode = "normal"
-                execute_command()
-                command_buffer = ""
-                return
-            }
-            if (cd == 127 || cd == 8) {
-                if (len(command_buffer) > 0) {
-                    command_buffer = substring(command_buffer, 0, len(command_buffer) - 1)
-                    message = ":" + command_buffer
-                }
-                return
-            }
-            if (cd == 27) {
-                mode = "normal"
-                command_buffer = ""
-                message = ""
-                return
-            }
-            command_buffer = command_buffer + kc
-            message = ":" + command_buffer
-        }
+    if (kt == "escape") {
+        find_mode = false
+        find_buffer = ""
+        message = ""
         return
     }
 
-    if (mode == "panel") {
-        handle_panel_input(key)
+    if (kt == "char") {
+        if (cd == 13 || cd == 10) {
+            find_next()
+            find_mode = false
+            return
+        }
+        if (cd == 127 || cd == 8) {
+            if (len(find_buffer) > 0) {
+                find_buffer = substring(find_buffer, 0, len(find_buffer) - 1)
+            }
+            return
+        }
+        if (cd == 27) {
+            find_mode = false
+            find_buffer = ""
+            message = ""
+            return
+        }
+        if (cd >= 32 && cd < 127) {
+            find_buffer = find_buffer + kc
+        }
+    }
+}
+
+fn handle_goto_input(key) {
+    let kt = key["type"]
+    let kc = key["key"]
+    let cd = key["code"]
+
+    if (kt == "escape") {
+        goto_mode = false
+        goto_buffer = ""
+        message = ""
+        return
+    }
+
+    if (kt == "char") {
+        if (cd == 13 || cd == 10) {
+            goto_line_num()
+            goto_mode = false
+            goto_buffer = ""
+            return
+        }
+        if (cd == 127 || cd == 8) {
+            if (len(goto_buffer) > 0) {
+                goto_buffer = substring(goto_buffer, 0, len(goto_buffer) - 1)
+            }
+            return
+        }
+        if (cd == 27) {
+            goto_mode = false
+            goto_buffer = ""
+            message = ""
+            return
+        }
+        if (cd >= 48 && cd <= 57) {
+            goto_buffer = goto_buffer + kc
+        }
+    }
+}
+
+// ============================================================
+// Input - Normal Mode (main editor)
+// ============================================================
+
+fn handle_normal_key(key) {
+    let kt = key["type"]
+    let kc = key["key"]
+    let cd = key["code"]
+
+    if (kt == "escape") {
+        mode = "normal"
+        command_buffer = ""
+        message = ""
+        find_mode = false
+        goto_mode = false
         return
     }
 
@@ -980,7 +1531,142 @@ fn handle_key(key) {
         if (kc == "down") { move_down() }
         if (kc == "left") { move_left() }
         if (kc == "right") { move_right() }
+        return
     }
+
+    if (kt == "special") {
+        if (kc == "home") { move_home() }
+        if (kc == "end") { move_end() }
+        if (kc == "pageup") { page_up() }
+        if (kc == "pagedown") { page_down() }
+        if (kc == "delete") { delete_char() }
+        return
+    }
+
+    if (kt == "char") {
+        if (cd == 17) {
+            should_quit = true
+            return
+        }
+        if (cd == 19) { save_file(); return }
+        if (cd == 14) { new_file(); return }
+        if (cd == 15) {
+            mode = "command"
+            command_buffer = "e "
+            message = "Open file: "
+            return
+        }
+        if (cd == 12) {
+            if (panel_visible) {
+                panel_visible = false
+            } else {
+                panel_visible = true
+            }
+            if (panel_visible) {
+                mode = "panel"
+                refresh_file_list()
+            }
+            return
+        }
+        if (cd == 44) { settings_open = true; return }
+        if (cd == 58) {
+            mode = "command"
+            command_buffer = ""
+            message = ":"
+            return
+        }
+        if (cd == 3) { clipboard_copy_selection(); return }
+        if (cd == 24) { push_undo_snapshot(); clipboard_cut_selection(); return }
+        if (cd == 22) { clipboard_paste(); return }
+        if (cd == 26) { undo(); return }
+        if (cd == 25) { redo(); return }
+        if (cd == 6) { find_mode = true; find_buffer = ""; message = ""; return }
+        if (cd == 7) { goto_mode = true; goto_buffer = ""; message = ""; return }
+        if (cd == 1) {
+            cursor_line = 0
+            cursor_col = 0
+            message = "Cursor to start"
+            return
+        }
+        if (cd == 4) { duplicate_line(); return }
+        if (cd == 31) { toggle_comment(); return }
+        if (cd == 100) { delete_line(); return }
+        if (cd == 97) { move_end(); return }
+        if (cd == 105) {
+            mode = "panel"
+            refresh_file_list()
+            message = "File explorer (r:refresh Enter:open Esc:close)"
+            return
+        }
+        if (cd == 107) { move_up(); return }
+        if (cd == 106) { move_down(); return }
+        if (cd == 104) { move_left(); return }
+        if (cd == 108) { move_right(); return }
+        if (cd == 119) { move_word_right(); return }
+        if (cd == 98) { move_word_left(); return }
+        if (cd == 48) { move_home(); return }
+        if (cd == 36) { move_end(); return }
+        if (cd == 127 || cd == 8) { push_undo_snapshot(); backspace(); return }
+        if (cd == 13 || cd == 10) { push_undo_snapshot(); insert_newline(); return }
+        if (cd == 9) {
+            push_undo_snapshot()
+            insert_char(" ")
+            insert_char(" ")
+            insert_char(" ")
+            insert_char(" ")
+            return
+        }
+        if (cd == 112) { page_up(); return }
+        if (cd == 110) { page_down(); return }
+        if (cd >= 32) {
+            if (cd < 127) {
+                push_undo_snapshot()
+                insert_char(kc)
+                return
+            }
+        }
+    }
+}
+
+// ============================================================
+// Render all (called when redraw needed)
+// ============================================================
+
+fn render_all(term_w, term_h) {
+    if (cursor_line < scroll_top) {
+        scroll_top = cursor_line
+    }
+    let editor_h = term_h - 4
+    if (cursor_line >= scroll_top + editor_h) {
+        scroll_top = cursor_line - editor_h + 1
+    }
+    if (scroll_top < 0) { scroll_top = 0 }
+
+    ui.clear(THEME_BG)
+
+    render_title_bar(term_w)
+
+    let editor_x = 1
+    let editor_w = term_w
+    if (panel_visible) {
+        editor_x = panel_width + 2
+        editor_w = term_w - panel_width - 1
+        render_file_explorer(1, 3, panel_width, term_h - 5)
+    }
+
+    render_editor(editor_x, 3, editor_w, term_h - 5)
+    render_status_bar(term_w, term_h)
+    render_message_bar(term_w, term_h)
+
+    if (find_mode || goto_mode) {
+        render_find_bar(term_w, term_h)
+    }
+
+    if (settings_open) {
+        render_settings(term_w, term_h)
+    }
+
+    ui.flush()
 }
 
 // ============================================================
@@ -1002,131 +1688,75 @@ fn main() {
     ui.enter_alt_screen()
     ui.enable_raw_mode()
 
-    message = "Welcome to Forge Studio! Ctrl+,:Settings :help for commands"
+    message = "Forge Studio v2 | Ctrl+S:Save Ctrl+Z:Undo Ctrl+F:Find Ctrl+,:Settings"
 
     let running = true
+    let size = ui.get_size()
+    let term_w = size[0]
+    let term_h = size[1]
+    render_all(term_w, term_h)
+
     while (running) {
-        let size = ui.get_size()
-        let term_w = size[0]
-        let term_h = size[1]
-
-        if (cursor_line < scroll_top) {
-            scroll_top = cursor_line
-        }
-        let editor_h = term_h - 3
-        if (cursor_line >= scroll_top + editor_h) {
-            scroll_top = cursor_line - editor_h + 1
-        }
-        if (scroll_top < 0) { scroll_top = 0 }
-
-        ui.clear(THEME_BG)
-
-        render_title_bar(term_w)
-
-        let editor_x = 1
-        let editor_w = term_w
-        if (panel_visible) {
-            editor_x = panel_width + 2
-            editor_w = term_w - panel_width - 1
-            render_file_explorer(1, 2, panel_width, term_h - 3)
-        }
-
-        render_editor(editor_x, 2, editor_w, term_h - 3)
-        render_status_bar(term_w, term_h)
-        render_message_bar(term_w, term_h)
-
-        if (settings_open) {
-            render_settings(term_w, term_h)
-        }
-
-        ui.flush()
-
-        if (ui.poll_input(100)) {
+        if (should_quit) {
+            running = false
+        } else if (ui.poll_input(100)) {
             let key = ui.read_key()
+            let kt = key["type"]
 
-            if (settings_open) {
+            if (kt == "none") {
+            } else if (kt == "resize") {
+                size = ui.get_size()
+                term_w = size[0]
+                term_h = size[1]
+                render_all(term_w, term_h)
+            } else if (settings_open) {
                 handle_settings_input(key)
+                render_all(term_w, term_h)
+            } else if (find_mode) {
+                handle_find_input(key)
+                render_all(term_w, term_h)
+            } else if (goto_mode) {
+                handle_goto_input(key)
+                render_all(term_w, term_h)
             } else if (mode == "command") {
-                handle_key(key)
-            } else if (mode == "panel") {
-                handle_key(key)
-            } else {
-                let mk = key["type"]
-                let mv = key["key"]
-                let mc = key["code"]
+                let cd = key["code"]
 
-                if (mk == "char") {
-
-                    if (mc == 17) {
-                        ui.disable_raw_mode()
-                        ui.exit_alt_screen()
-                        print("Goodbye!")
-                        return
-                    }
-                    if (mc == 19) { save_file() }
-                    if (mc == 14) { new_file() }
-                    if (mc == 15) {
-                        mode = "command"
-                        command_buffer = "e "
-                        message = "Open file: "
-                    }
-                    if (mc == 12) {
-                        if (panel_visible) {
-                            panel_visible = false
-                        } else {
-                            panel_visible = true
-                        }
-                        if (panel_visible) {
-                            mode = "panel"
-                            refresh_file_list()
-                        }
-                    }
-                    if (mc == 44) {
-                        settings_open = true
-                    }
-                    if (mc == 58) {
-                        mode = "command"
-                        command_buffer = ""
-                        message = ":"
-                    }
-                    if (mc == 107) { move_up() }
-                    if (mc == 106) { move_down() }
-                    if (mc == 104) { move_left() }
-                    if (mc == 108) { move_right() }
-                    if (mc == 48) { move_home() }
-                    if (mc == 36) { move_end() }
-                    if (mc == 127 || mc == 8) { backspace() }
-                    if (mc == 13 || mc == 10) { insert_newline() }
-                    if (mc == 9) {
-                        insert_char(" ")
-                        insert_char(" ")
-                        insert_char(" ")
-                        insert_char(" ")
-                    }
-                    if (mc == 112) {
-                        page_up()
-                    }
-                    if (mc == 110) {
-                        page_down()
-                    }
-                    if (mc == 105) {
-                        mode = "panel"
-                        refresh_file_list()
-                        message = "File explorer (r:refresh Enter:open Esc:close)"
-                    }
-                    if (mc >= 32) {
-                        if (mc < 127) {
-                            insert_char(mv)
-                        }
-                    }
-                }
-                if (mk == "escape") {
+                if (kt == "escape") {
                     mode = "normal"
                     command_buffer = ""
+                    message = ""
+                } else if (kt == "char") {
+                    if (cd == 13 || cd == 10) {
+                        mode = "normal"
+                        execute_command()
+                        command_buffer = ""
+                    } else if (cd == 127 || cd == 8) {
+                        if (len(command_buffer) > 0) {
+                            command_buffer = substring(command_buffer, 0, len(command_buffer) - 1)
+                            message = ":" + command_buffer
+                        }
+                    } else if (cd == 27) {
+                        mode = "normal"
+                        command_buffer = ""
+                        message = ""
+                    } else {
+                        command_buffer = command_buffer + key["key"]
+                        message = ":" + command_buffer
+                    }
                 }
+                render_all(term_w, term_h)
+            } else if (mode == "panel") {
+                handle_panel_input(key)
+                render_all(term_w, term_h)
+            } else {
+                handle_normal_key(key)
+                render_all(term_w, term_h)
             }
         }
     }
+
+    ui.disable_raw_mode()
+    ui.exit_alt_screen()
 }
 
 main()
