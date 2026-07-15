@@ -35,6 +35,7 @@
 | **SDL2 IDE** | Full graphical IDE with editor, REPL, file browser, and debugger |
 | **Package Manager** | `forge pkg install <name>` with community registry |
 | **Tools** | Formatter, linter, debugger included |
+| **Compute Module** | Cross-platform GPU compute (HIP/ROCm, CUDA, SYCL) via `import "compute"` |
 | **Cross-Platform** | Linux (all distros), Windows, macOS |
 
 ---
@@ -104,6 +105,10 @@ forge --ide
 # Package manager
 forge pkg update
 forge pkg install stdlib
+
+# Cross-platform GPU compute
+import "compute"
+let ctx = compute.create()
 ```
 
 ### Hello World
@@ -352,6 +357,84 @@ randomInt(min, max)     // Random integer in range
 { "a": 1 }.entries()    // [["a", 1]]
 { "a": 1 }.has("a")     // true
 { "a": 1 }.clone()      // Copy
+```
+
+---
+
+## Compute Module (Cross-Platform GPU Compute)
+
+The `compute` module provides cross-platform GPU compute capabilities with automatic backend selection (HIP/ROCm for AMD, CUDA for NVIDIA, SYCL for Intel, CPU fallback).
+
+```bash
+# Build with ROCm support (AMD GPUs)
+cmake .. -DFORGE_WITH_ROCM=ON
+```
+
+```forge
+import "compute"
+
+// Create compute context (auto-selects best backend)
+let ctx = compute.create()
+
+// Get backend name
+print(compute.backend_name(1))  // "HIP"
+print(compute.backend_name(6))  // "CPU"
+
+// Create tensors (on GPU if available)
+let a = compute.tensor([1.0, 2.0, 3.0, 4.0], [2, 2])
+let b = compute.tensor([2.0, 3.0, 4.0, 5.0], [2, 2])
+
+// Matrix multiplication
+let c = compute.matmul(a, b)
+
+// Element-wise operations
+let d = compute.add(a, b)
+let e = compute.mul(a, b)
+
+// Copy result back to host
+let result = compute.to_host(c)
+print(result)  // [[7, 10], [15, 22]]
+
+// Element-wise activation functions
+let activated = compute.gelu(d)
+
+// Reduction operations
+let sum = compute.sum(a)  // scalar
+let max_val = compute.max(a)
+```
+
+**Supported Operations:**
+| Category | Operations |
+|----------|------------|
+| Element-wise | ADD, SUB, MUL, DIV, ABS, NEG, SQRT, EXP, LOG, SIN, COS, TANH, SIGMOID, GELU, SILU, RELU, LEAKY_RELU |
+| Comparison | EQ, NE, LT, LE, GT, GE, LOGICAL_AND, LOGICAL_OR, LOGICAL_NOT |
+| Reduction | SUM, MEAN, MAX, MIN, ARGMAX, ARGMIN |
+| Matrix | MATMUL, BATCH_MATMUL, TRANSPOSE, RESHAPE |
+| Tensor | CONCAT, SPLIT, STACK, UNSTACK, SLICE, STRIDED_SLICE, GATHER, SCATTER |
+| Convolution | CONV2D, CONV2D_TRANSPOSE, DEPTHWISE_CONV2D |
+| Pooling | MAX_POOL2D, AVG_POOL2D, ADAPTIVE_POOL2D |
+| Normalization | BATCH_NORM, LAYER_NORM, GROUP_NORM, INSTANCE_NORM |
+| Attention | SCALED_DOT_PRODUCT_ATTENTION, MULTI_HEAD_ATTENTION |
+| Loss | CROSS_ENTROPY, MSE, BCE |
+
+**Backend Support:**
+| Backend | Vendor | Status |
+|---------|--------|--------|
+| HIP/ROCm | AMD | ✅ Primary |
+| CUDA | NVIDIA | 🔧 Planned |
+| SYCL/OneAPI | Intel | 🔧 Planned |
+| Metal | Apple | 🔧 Planned |
+| Vulkan | Cross-platform | 🔧 Planned |
+| CPU | Any | ✅ Fallback |
+
+**Building with ROCm (AMD):**
+```bash
+# Install ROCm
+sudo apt install rocm-dev
+
+# Build with ROCm
+cmake .. -DFORGE_WITH_ROCM=ON
+make -j$(nproc)
 ```
 
 ---

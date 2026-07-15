@@ -2139,6 +2139,48 @@ void ForgeVM::defineModules() {
     {
         defineLLMModule(*this);
     }
+
+    // Compute module (cross-platform GPU compute)
+    {
+        defineComputeModule();
+    }
+}
+
+} // namespace forge::fvm
+
+// Compute module implementation
+#include "forge_compute.hpp"
+
+namespace forge::fvm {
+
+void ForgeVM::defineComputeModule() {
+    auto* computeMod = new GCMap();
+
+    // compute.create() -> context object
+    computeMod->entries["create"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+        (void)args;
+        auto ctx = forge::compute::ComputeContext::create();
+        if (!ctx) {
+            return FValue::nil();
+        }
+        // Store context in a map or return a handle
+        static int ctx_counter = 0;
+        int id = ++ctx_counter;
+        return FValue::integer(id);
+    }, "compute.create"));
+
+    // compute.backend_name(backend) -> string
+    computeMod->entries["backend_name"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1) throw std::runtime_error("compute.backend_name() expects 1 argument");
+        int backend = (int)args[0].asInteger();
+        const char* names[] = {"NONE", "HIP", "CUDA", "SYCL", "METAL", "VULKAN", "CPU"};
+        if (backend >= 0 && backend < 7) {
+            return FValue::obj(new GCString(names[backend]));
+        }
+        return FValue::obj(new GCString("UNKNOWN"));
+    }, "compute.backend_name"));
+
+    this->defineModule("compute", computeMod);
 }
 
 } // namespace forge::fvm

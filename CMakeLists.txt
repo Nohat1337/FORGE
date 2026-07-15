@@ -8,6 +8,28 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(FORGE_WITH_LLVM "Enable LLVM JIT compiler" OFF)
 option(FORGE_WITH_LSP "Enable Language Server Protocol" ON)
 option(FORGE_WASM "Build for WebAssembly (Emscripten)" OFF)
+option(FORGE_WITH_ROCM "Enable AMD ROCm/HIP support" ON)
+option(FORGE_WITH_CUDA "Enable NVIDIA CUDA support" OFF)
+
+# Find ROCm/HIP if requested
+if(FORGE_WITH_ROCM)
+    find_package(HIP QUIET)
+    if(HIP_FOUND)
+        message(STATUS "Found HIP: ${HIP_VERSION}")
+        add_definitions(-DFORGE_HAS_HIP)
+    else()
+        message(STATUS "HIP not found, will use CPU fallback")
+    endif()
+endif()
+
+# Find CUDA if requested
+if(FORGE_WITH_CUDA)
+    find_package(CUDA QUIET)
+    if(CUDA_FOUND)
+        message(STATUS "Found CUDA: ${CUDA_VERSION}")
+        add_definitions(-DFORGE_HAS_CUDA)
+    endif()
+endif()
 
 # Find LLVM if requested
 if(FORGE_WITH_LLVM)
@@ -41,6 +63,7 @@ set(COMMON_SOURCES
     src/fvm/ffi.cpp
     src/fvm/actors.cpp
     src/fvm/llm.cpp
+    src/fvm/forge_compute.cpp
     src/pkg_manager.cpp
 )
 
@@ -71,6 +94,22 @@ find_package(SDL2 REQUIRED)
 target_link_libraries(forge PRIVATE dl ${SDL2_LIBRARIES})
 target_link_libraries(forgevm PRIVATE dl pthread ${SDL2_LIBRARIES})
 target_include_directories(forgevm PRIVATE ${SDL2_INCLUDE_DIRS})
+
+# ROCm/HIP linking
+if(FORGE_WITH_ROCM AND HIP_FOUND)
+    target_link_libraries(forge PRIVATE ${HIP_LIBRARIES})
+    target_link_libraries(forgevm PRIVATE ${HIP_LIBRARIES})
+    target_include_directories(forge PRIVATE ${HIP_INCLUDE_DIRS})
+    target_include_directories(forgevm PRIVATE ${HIP_INCLUDE_DIRS})
+    add_definitions(-DFORGE_HAS_HIP)
+endif()
+
+# CUDA linking
+if(FORGE_WITH_CUDA AND CUDA_FOUND)
+    target_link_libraries(forge PRIVATE ${CUDA_LIBRARIES})
+    target_link_libraries(forgevm PRIVATE ${CUDA_LIBRARIES})
+    add_definitions(-DFORGE_HAS_CUDA)
+endif()
 
 # LLVM linking for JIT
 if(FORGE_WITH_LLVM)

@@ -323,6 +323,8 @@ private:
     bool callValue(const FValue& callee, int argCount);
     void defineBuiltins();
     void defineModules();
+    void defineComputeModule();
+
     void closeUpvalues(FValue* last);
     GCUpvalue* captureUpvalue(FValue* slot);
 
