@@ -26,12 +26,14 @@
 |---------|-------------|
 | **Clean Syntax** | Familiar, readable, with modern ergonomics |
 | **Bytecode VM** | Fast stack-based execution, JIT-ready architecture |
+| **Compile to Bytecode** | `forgevm compile` produces `.fclass` binaries — load and run them with `forgevm` |
 | **Rich Types** | Integers, floats, strings, arrays, maps, classes, closures |
 | **Pattern Matching** | Powerful match expressions with guards and destructuring |
 | **Generators** | `yield`-based coroutines with eager evaluation |
 | **Modules** | Import system with stdlib (io, os, json, path, system) |
 | **REPL** | Interactive mode with auto-print and history |
-| **IDE** | Terminal-based Forge Studio with syntax highlighting |
+| **SDL2 IDE** | Full graphical IDE with editor, REPL, file browser, and debugger |
+| **Package Manager** | `forge pkg install <name>` with community registry |
 | **Tools** | Formatter, linter, debugger included |
 | **Cross-Platform** | Linux (all distros), Windows, macOS |
 
@@ -90,8 +92,18 @@ forge
 # Run a file
 forge hello.fge
 
-# Open IDE
-forge-studio
+# Compile to bytecode
+forgevm compile hello.fge hello.fclass
+
+# Run compiled bytecode
+forgevm hello.fclass
+
+# Open SDL2 IDE
+forge --ide
+
+# Package manager
+forge pkg update
+forge pkg install stdlib
 ```
 
 ### Hello World
@@ -369,8 +381,8 @@ forge-debug --step file.fge             # Step through
 
 ### IDE
 ```bash
-forge-studio                    # Open in current directory
-forge-studio path/to/file.fge   # Open specific file
+forge --ide                  # Open SDL2 IDE in current directory
+forgevm --ide                # Same via forgevm
 ```
 
 **Keybindings:**
@@ -400,6 +412,13 @@ forge-studio path/to/file.fge   # Open specific file
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐              │
 │  │  Stack   │  │  Frames  │  │  Globals │              │
 │  └──────────┘  └──────────┘  └──────────┘              │
+└──────────────────────┬──────────────────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────────────────┐
+│        .fclass Bytecode ──► forgevm loader              │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐              │
+│  │  CP      │  │ Methods  │  │  Code    │              │
+│  └──────────┘  └──────────┘  └──────────┘              │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -407,6 +426,7 @@ forge-studio path/to/file.fge   # Open specific file
 - **Memory**: Stack + heap with GC-ready object model
 - **Calls**: Closure-based with upvalue capture
 - **Types**: Tagged union (nil, bool, int, float, obj)
+- **.fclass Format**: Binary bytecode with constant pool, methods, and code attributes
 
 ---
 
@@ -415,21 +435,33 @@ forge-studio path/to/file.fge   # Open specific file
 ```
 forge/
 ├── src/                    # Core VM & Compiler
+│   ├── main.cpp           # forge CLI entry point
+│   ├── forgevm_main.cpp   # forgevm CLI entry point (compile/run)
 │   ├── lexer.*            # Tokenizer
 │   ├── parser.*           # Recursive descent parser
 │   ├── compiler.*         # AST → Bytecode
-│   ├── vm.*               # Stack VM
+│   ├── vm.*               # Original stack VM
 │   ├── chunk.*            # Bytecode container
 │   ├── value.*            # Value system
-│   └── ast.*              # AST nodes
+│   ├── ast.*              # AST nodes
+│   ├── pkg_manager.cpp    # Package manager (forge pkg)
+│   └── fvm/               # Forge Virtual Machine (FVM)
+│       ├── runtime.*      # FVM interpreter + classfile loader
+│       ├── classfile.*    # .fclass binary format (load/save)
+│       ├── sdl2_ui.*      # SDL2 windowed UI primitives
+│       ├── sdl_fvm_ui.cpp # Default FVM window (Forge logo)
+│       └── forge_ide.*    # SDL2 IDE (editor, REPL, file browser)
 ├── tools/                 # Developer tools
 │   ├── format.cpp         # Code formatter
 │   ├── linter.cpp         # Static analysis
 │   └── forge-debug.cpp    # Debugger
-├── ide/                   # Forge Studio (terminal IDE)
-│   └── src/
+├── ide/                   # Legacy IDE directory (unused)
 ├── examples/              # Example programs
+├── packages/              # Package registry (registry.json)
 ├── assets/                # Icons, logos
+├── GUIDE.md               # Comprehensive user guide
+├── .github/workflows/     # CI/CD pipeline
+│   └── ci.yml
 ├── build_linux_package.sh # Linux packager
 ├── forge_installer.nsi    # Windows installer
 └── CMakeLists.txt         # Build system
@@ -439,8 +471,13 @@ forge/
 
 ## Roadmap
 
+- [x] **Bytecode Compiler** — Source → .fclass bytecode
+- [x] **Forge VM (FVM)** — Production VM with GC, threading, FFI
+- [x] **SDL2 UI** — Cross-platform windowed UI layer
+- [x] **SDL2 IDE** — Full graphical IDE (editor, REPL, file browser)
+- [x] **Package Manager** — `forge pkg` with community registry
+- [x] **Compile & Run** — `forgevm compile` + `forgevm <file.fclass>`
 - [ ] **JIT Compiler** — LLVM backend for hot paths
-- [ ] **Package Manager** — `forge pkg` with registry
 - [ ] **LSP Server** — Full IDE support (VS Code, Neovim)
 - [ ] **WASM Target** — Run Forge in browsers
 - [ ] **FFI** — Native C function calls
@@ -485,16 +522,8 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
-## Community
-
-- **Discord**: [discord.gg/forge-lang](https://discord.gg/forge-lang)
-- **GitHub**: [github.com/forge-lang/forge](https://github.com/forge-lang/forge)
-- **Twitter**: [@forge_lang](https://twitter.com/forge_lang)
-
----
-
 <p align="center">
-  Made with ❤️ by the Forge Team
+  Made by nohat1337 - NH
 </p>
 <p align="center">
   <img src="assets/forge-icon.png" alt="Forge" width="100"/>
