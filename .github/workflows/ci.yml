@@ -44,11 +44,42 @@ jobs:
         ./forgevm compile ../examples/simple.fge /tmp/simple.fclass
         ./forgevm /tmp/simple.fclass
 
+    - name: Test FFI module
+      run: |
+        cd build
+        echo 'import "ffi"; let h = ffi.open("libc.so.6"); let puts = ffi.sym(h, "puts"); ffi.call_void(puts, ffi.str_ptr("Hello from FFI")); ffi.close(h);' > /tmp/test_ffi.fge
+        ./forge /tmp/test_ffi.fge
+
+    - name: Test concurrent module
+      run: |
+        cd build
+        echo 'import "concurrent"; let id = concurrent.spawn(fn() { print("Actor running"); }); concurrent.sleep(10); print("Actors: " + str(concurrent.actors()));' > /tmp/test_concurrent.fge
+        ./forge /tmp/test_concurrent.fge
+
+    - name: Test LLM module (quick generate)
+      run: |
+        cd build
+        echo 'import "llm"; let result = llm.quick_generate("Hello world", "tiny"); print(result);' > /tmp/test_llm.fge
+        ./forge /tmp/test_llm.fge
+
+    - name: Test type checker
+      run: |
+        cd build
+        echo 'let x: int = 42; let y: string = "hello"; let z: float = 3.14; fn add(a: int, b: int) -> int { a + b }; print(add(1, 2));' > /tmp/test_type.fge
+        ./forge /tmp/test_type.fge
+
     - name: Test tools exist
       run: |
         cd build
         test -x tools/forge-format
         test -x tools/forge-lint
+        test -x tools/forge-debug
+        test -x tools/forge-lsp
+
+    - name: Test LSP server
+      run: |
+        cd build
+        timeout 5 ./tools/forge-lsp --stdio < /dev/null || true
 
   build-macos:
     runs-on: macos-latest
@@ -113,3 +144,59 @@ jobs:
         cd build
         Release\forgevm.exe compile ..\examples\test_all.fge C:\tmp\test_all.fclass
         Release\forgevm.exe C:\tmp\test_all.fclass
+
+  build-with-llvm:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install LLVM
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y llvm-15-dev libsdl2-dev
+
+    - name: Configure with LLVM
+      run: |
+        mkdir build-llvm
+        cd build-llvm
+        cmake .. -DCMAKE_BUILD_TYPE=Release -DFORGE_WITH_LLVM=ON
+
+    - name: Build with LLVM JIT
+      run: |
+        cd build-llvm
+        make -j$(nproc)
+
+    - name: Test JIT
+      run: |
+        cd build-llvm
+        ./forge ../examples/test_all.fge
+
+  wasm-build:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install Emscripten
+      uses: mymindstorm/setup-emscripten@v1
+      with:
+        version: '3.1.45'
+
+    - name: Configure WASM
+      run: |
+        emcmake cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=${EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake -DCMAKE_EXE_LINKER_FLAGS="-s WASM=1 -s MODULARIZE=1"
+
+    - name: Build WASM
+      run: |
+        make -j$(nproc)
+
+    - name: Upload WASM artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: forge-wasm
+        path: forge.wasm
