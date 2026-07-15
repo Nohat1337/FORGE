@@ -42,6 +42,14 @@ private:
     std::vector<CompilerState*> compilerStack_;
     CompilerState* current_ = nullptr;
     ClassCompilerState* currentClass_ = nullptr;
+
+    struct LoopState {
+        int loopStart = 0;
+        int breakTarget = -1;
+        std::vector<int> breakJumps;
+    };
+    LoopState* currentLoop_ = nullptr;
+
     std::unordered_set<std::string> constGlobals_;
     bool hadError_ = false;
     std::string errorMessage_;
@@ -87,6 +95,8 @@ private:
     void compileExprStmt(ExprStmt& stmt);
     void compileExternFn(ExternFnDecl& decl);
     void compileImport(ImportStmt& decl);
+    void compileBreak(BreakStmt& stmt);
+    void compileContinue(ContinueStmt& stmt);
 
     void compileExpression(ExprPtr expr);
     void compileIntegerLiteral(IntegerLiteral& e);

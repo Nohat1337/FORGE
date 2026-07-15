@@ -1,4 +1,5 @@
 #include "runtime.hpp"
+#include "sdl2_ui.hpp"
 #include "../lexer.hpp"
 #include "../parser.hpp"
 #include "../compiler.hpp"
@@ -1819,6 +1820,9 @@ void ForgeVM::defineModules() {
         }, "ui.exit_alt_screen"));
 
         modules_["ui"] = FValue::obj(uiMod);
+    }
+    {
+        defineSDL2Module(*this);
     }
     {
         auto* testMod = new GCMap();

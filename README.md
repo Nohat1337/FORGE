@@ -1,7 +1,7 @@
 # Forge Programming Language
 
 <p align="center">
-  <img src="assets/icon.svg" alt="Forge Logo" width="200"/>
+  <img src="assets/forge-icon.png" alt="Forge Logo" width="200"/>
 </p>
 
 <p align="center">
@@ -497,5 +497,5 @@ MIT License — see [LICENSE](LICENSE) for details.
   Made with ❤️ by the Forge Team
 </p>
 <p align="center">
-  <img src="assets/icon.svg" alt="Forge" width="100"/>
+  <img src="assets/forge-icon.png" alt="Forge" width="100"/>
 </p>

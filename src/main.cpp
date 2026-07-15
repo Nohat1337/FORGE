@@ -6,6 +6,7 @@
 #include "parser.hpp"
 #include "compiler.hpp"
 #include "fvm/runtime.hpp"
+#include "fvm/sdl2_ui.hpp"
 #include "pkg_manager.hpp"
 
 #define FORGE_VERSION "1.0.0"
@@ -73,6 +74,14 @@ int main(int argc, char* argv[]) {
             }
             runString(argv[++i]);
             return 0;
+        } else if (arg == "--sdl" || arg == "gui") {
+            return forge::fvm::runSdlGui();
+        } else if (arg == "--screenshot") {
+            if (i + 1 >= argc) {
+                std::cerr << "Error: --screenshot requires a file path\n";
+                return 1;
+            }
+            return forge::fvm::runSdlGui(argv[++i]);
         } else if (arg == "pkg") {
             int pkgArgc = argc - i - 1;
             char** pkgArgv = argv + i + 1;

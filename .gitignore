@@ -1,7 +1,10 @@
 build/
 build-debug/
+build-release/
+build-sdl/
 *.o
 *.d
 .cache/
 compile_commands.json
 .opencode/
+assets/*.bmp

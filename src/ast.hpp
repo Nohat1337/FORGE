@@ -218,6 +218,9 @@ struct ExternFnDecl {
     std::string library;
 };
 
+struct BreakStmt {};
+struct ContinueStmt {};
+
 struct ImportStmt {
     std::string moduleName;
     std::string alias;
@@ -229,7 +232,7 @@ struct Stmt {
         ExprStmt, VarDecl, ReturnStmt, IfStmt, WhileStmt,
         ForStmt, ForInStmt, BlockStmt, FnDecl, GenDecl, ClassDecl,
         StructDecl, ImplDecl, EnumDecl,
-        TryStmt, ExternFnDecl, ImportStmt
+        TryStmt, ExternFnDecl, ImportStmt, BreakStmt, ContinueStmt
     >;
     Variant node;
     int line = 0;

@@ -1,4 +1,5 @@
 #include "fvm/runtime.hpp"
+#include "fvm/sdl2_ui.hpp"
 #include "pkg_manager.hpp"
 #include "forge_build.hpp"
 #include <iostream>
@@ -44,6 +45,19 @@ static void runString(const std::string& code) {
 int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
+        if (arg == "--sdl" || arg == "gui") {
+            // Launch the FVM's SDL2 windowed UI. The FVM and its UI are
+            // one package, so the same binary both runs .fge headless
+            // and opens the cross-platform SDL2 window.
+            return forge::fvm::runSdlGui();
+        }
+        if (arg == "--screenshot") {
+            if (i + 1 >= argc) {
+                std::cerr << "Error: --screenshot requires a file path\n";
+                return 1;
+            }
+            return forge::fvm::runSdlGui(argv[++i]);
+        }
         if (arg == "--version" || arg == "-v") {
             std::cout << "Forge VM v" << FORGEVM_VERSION << " (FVM)\n";
             return 0;
@@ -56,6 +70,7 @@ int main(int argc, char* argv[]) {
             std::cout << "  -e <code>        Execute string as code\n";
             std::cout << "  pkg <cmd>        Package manager commands\n";
             std::cout << "  build            Build project from ForgeLists.txt\n";
+            std::cout << "  --sdl, gui       Launch the SDL2 windowed UI for the FVM\n";
             std::cout << "  --gc-stats       Show GC statistics after execution\n";
             std::cout << "  (no args)        Start REPL\n";
             return 0;

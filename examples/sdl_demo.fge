@@ -1,0 +1,58 @@
+// FVM SDL2 UI demo, written in Forge (.fge).
+// The `sdl` module is a C++ native module (src/fvm/sdl2_ui.cpp).
+// This program is the script that DRIVES the SDL2 UI; the actual
+// rendering/input lives in C++ (the FVM's UI layer).
+
+import "sdl"
+
+// Open the window (C++ SDL2 backend)
+sdl.init(640, 480, "Forge -> SDL2 (FVM)")
+
+let mx = 0
+let my = 0
+let clicks = 0
+
+// Main event/render loop
+while (true) {
+    // Clear background
+    sdl.clear(20, 22, 34)
+
+    // Title bar drawn by C++ primitives
+    sdl.rect(0, 0, 640, 36, 36, 40, 56)
+    sdl.text(16, 12, "Forge FVM  +  SDL2", 120, 200, 255)
+
+    // A moving circle that follows the mouse
+    sdl.circle(mx, my, 24, 98, 160, 234)
+
+    // Instructions
+    sdl.text(16, 60, "Move mouse, click to increment counter", 200, 200, 210)
+    sdl.text(16, 80, "clicks: " + str(clicks), 120, 220, 140)
+    sdl.text(16, 100, "ESC to quit", 160, 160, 170)
+
+    // A simple bar whose width tracks clicks
+    sdl.rect(16, 130, clicks * 8, 20, 90, 200, 120)
+
+    sdl.present()
+
+    // Poll C++ event pump
+    let e = sdl.poll()
+    let t = e["type"]
+
+    if (t == "quit") {
+        break
+    } else if (t == "motion") {
+        mx = e["x"]
+        my = e["y"]
+    } else if (t == "click") {
+        if (e["pressed"]) {
+            mx = e["x"]
+            my = e["y"]
+            clicks = clicks + 1
+        }
+    }
+
+    sdl.delay(16)
+}
+
+sdl.quit()
+print("SDL2 window closed.")

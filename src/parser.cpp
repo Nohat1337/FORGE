@@ -48,6 +48,12 @@ StmtPtr Parser::parseStatement() {
     if (check(TokenType::TRY)) return parseTryCatch();
     if (check(TokenType::EXTERN)) return parseExternFn();
     if (check(TokenType::IMPORT)) return parseImport();
+    if (check(TokenType::BREAK)) { advance(); return makeStmt(BreakStmt{}); }
+    if (check(TokenType::CONTINUE)) { advance(); return makeStmt(ContinueStmt{}); }
+    if (check(TokenType::LBRACE)) return parseBlock();
+    if (check(TokenType::TRY)) return parseTryCatch();
+    if (check(TokenType::EXTERN)) return parseExternFn();
+    if (check(TokenType::IMPORT)) return parseImport();
     return parseExprStmt();
 }
 

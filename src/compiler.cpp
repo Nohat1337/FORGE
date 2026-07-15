@@ -157,6 +157,8 @@ void Compiler::compileStatement(StmtPtr stmt) {
         void operator()(TryStmt& s) { c.compileTryCatch(s); }
         void operator()(ExternFnDecl& s) { c.compileExternFn(s); }
         void operator()(ImportStmt& s) { c.compileImport(s); }
+        void operator()(BreakStmt& s) { c.compileBreak(s); }
+        void operator()(ContinueStmt& s) { c.compileContinue(s); }
     };
     std::visit(Visitor{*this}, stmt->node);
 }
@@ -164,6 +166,22 @@ void Compiler::compileStatement(StmtPtr stmt) {
 void Compiler::compileExprStmt(ExprStmt& stmt) {
     compileExpression(stmt.expression);
     emitOp(replMode_ ? OP_PRINT : OP_POP);
+}
+
+void Compiler::compileBlock(BlockStmt& stmt) {
+    beginScope();
+    compileStatements(stmt.statements);
+    endScope();
+}
+
+void Compiler::compileBreak(BreakStmt&) {
+    if (!currentLoop_) error("break outside of loop");
+    currentLoop_->breakJumps.push_back(emitJump(OP_JUMP));
+}
+
+void Compiler::compileContinue(ContinueStmt&) {
+    if (!currentLoop_) error("continue outside of loop");
+    emitLoop(currentLoop_->loopStart);
 }
 
 void Compiler::compileVarDecl(VarDecl& decl) {
@@ -454,37 +472,48 @@ void Compiler::compileIf(IfStmt& stmt) {
 }
 
 void Compiler::compileWhile(WhileStmt& stmt) {
+    LoopState loop;
+    loop.loopStart = (int)currentChunk().code.size();
+    LoopState* prev = currentLoop_;
+    currentLoop_ = &loop;
     beginScope();
-    int loopStart = (int)currentChunk().code.size();
     compileExpression(stmt.condition);
     int exitJump = emitJump(OP_JUMP_IF_FALSE);
     emitOp(OP_POP);
     compileStatements(stmt.body);
     endScope();
-    emitLoop(loopStart);
+    emitLoop(loop.loopStart);
     patchJump(exitJump);
     emitOp(OP_POP);
+    for (int bj : loop.breakJumps) patchJump(bj);
+    currentLoop_ = prev;
 }
 
 void Compiler::compileFor(ForStmt& stmt) {
+    LoopState loop;
+    loop.loopStart = (int)currentChunk().code.size();
+    LoopState* prev = currentLoop_;
+    currentLoop_ = &loop;
     beginScope();
     if (stmt.initializer) compileStatement(stmt.initializer);
-    int loopStart = (int)currentChunk().code.size();
+    loop.loopStart = (int)currentChunk().code.size();
     if (stmt.condition) {
         compileExpression(stmt.condition);
         int exitJump = emitJump(OP_JUMP_IF_FALSE);
         emitOp(OP_POP);
         compileStatements(stmt.body);
         if (stmt.increment) { compileExpression(stmt.increment); emitOp(OP_POP); }
-        emitLoop(loopStart);
+        emitLoop(loop.loopStart);
         patchJump(exitJump);
         emitOp(OP_POP);
     } else {
         compileStatements(stmt.body);
         if (stmt.increment) { compileExpression(stmt.increment); emitOp(OP_POP); }
-        emitLoop(loopStart);
+        emitLoop(loop.loopStart);
     }
     endScope();
+    for (int bj : loop.breakJumps) patchJump(bj);
+    currentLoop_ = prev;
 }
 
 void Compiler::compileForIn(ForInStmt& stmt) {
@@ -530,12 +559,6 @@ void Compiler::compileForIn(ForInStmt& stmt) {
     patchJump(exitJump);
     emitOp(OP_POP);
 
-    endScope();
-}
-
-void Compiler::compileBlock(BlockStmt& stmt) {
-    beginScope();
-    compileStatements(stmt.statements);
     endScope();
 }
 
