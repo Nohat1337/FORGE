@@ -139,6 +139,8 @@ struct GCNative : GCObject {
     int arity = 0;
     GCNative(NativeFn fn, const std::string& n)
         : GCObject(GCObjType::NATIVE), function(std::move(fn)), name(n) {}
+    GCNative(NativeFn fn, const std::string& n, int a)
+        : GCObject(GCObjType::NATIVE), function(std::move(fn)), name(n), arity(a) {}
 };
 
 struct GCUpvalue : GCObject {
@@ -287,6 +289,8 @@ public:
 
     bool interpret(std::shared_ptr<GCFunction> function);
     bool interpretSource(const std::string& source, const std::string& filename = "<script>");
+    bool interpretClassFile(const std::string& path);
+    bool interpretClassFileData(const ClassFile& cf, const std::string& filename = "");
 
     void setArgs(int argc, char** argv) { savedArgc_ = argc; savedArgv_ = argv; }
 

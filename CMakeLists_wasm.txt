@@ -1,0 +1,31 @@
+# WASM build configuration
+# Usage: emcmake cmake .. -DCMAKE_TOOLCHAIN_FILE=cmake/wasm_toolchain.cmake
+cmake_minimum_required(VERSION 3.15)
+project(forge_wasm LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_executable(forge.wasm
+    src/main.cpp
+    src/lexer.cpp
+    src/parser.cpp
+    src/value.cpp
+    src/chunk.cpp
+    src/compiler.cpp
+    src/optimizer.cpp
+    src/fvm/runtime.cpp
+    src/fvm/classfile.cpp
+    src/fvm/ffi.cpp
+    src/wasm/forge_wasm.cpp
+    src/pkg_manager.cpp
+)
+
+target_include_directories(forge.wasm PRIVATE src)
+target_compile_definitions(forge.wasm PRIVATE FORGE_WASM)
+
+# Emscripten settings
+if(EMSCRIPTEN)
+    set(CMAKE_EXECUTABLE_SUFFIX ".js")
+    target_link_options(forge.wasm PRIVATE -s WASM=1 -s MODULARIZE=1 -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap"]')
+endif()

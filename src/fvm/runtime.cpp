@@ -1,5 +1,8 @@
 #include "runtime.hpp"
 #include "sdl2_ui.hpp"
+#include "ffi.hpp"
+#include "actors.hpp"
+#include "llm.hpp"
 #include "../lexer.hpp"
 #include "../parser.hpp"
 #include "../compiler.hpp"
@@ -18,8 +21,14 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <cstring>
+#include <dlfcn.h>
 
 namespace forge::fvm {
+
+// Forward declarations for module definitions
+void defineFFIModule(ForgeVM& vm);
+void defineConcurrentModule(ForgeVM& vm);
+void defineLLMModule(ForgeVM& vm);
 
 // ============================================================
 // Value <-> FValue Conversion
@@ -2114,6 +2123,21 @@ void ForgeVM::defineModules() {
         }, "fs.create_dir"));
 
         modules_["fs"] = FValue::obj(fsMod);
+    }
+    
+    // FFI module
+    {
+        defineFFIModule(*this);
+    }
+    
+    // Concurrent module (actor model + channels)
+    {
+        defineConcurrentModule(*this);
+    }
+    
+    // LLM module
+    {
+        defineLLMModule(*this);
     }
 }
 
