@@ -1,0 +1,53 @@
+{
+  "name": "forge-registry",
+  "version": "1.0.0",
+  "description": "Forge Package Registry",
+  "url": "https://github.com/Nohat1337/FORGE",
+  "packages": {
+    "stdlib": {
+      "name": "stdlib",
+      "version": "1.0.0",
+      "description": "Forge standard library (math, strings, datetime)",
+      "author": "Forge Team",
+      "license": "MIT",
+      "url": "https://github.com/Nohat1337/FORGE/tree/main/lib/stdlib",
+      "files": ["lib/stdlib/math.fge", "lib/stdlib/strings.fge", "lib/stdlib/datetime.fge"]
+    },
+    "ui": {
+      "name": "ui",
+      "version": "1.0.0",
+      "description": "Forge UI library (terminal UI, editor, syntax highlighting)",
+      "author": "Forge Team",
+      "license": "MIT",
+      "url": "https://github.com/Nohat1337/FORGE/tree/main/lib/ui",
+      "files": ["lib/ui/ui.fge", "lib/ui/syntax.fge", "lib/ui/editor.fge", "lib/ui/theme.fge", "lib/ui/native.fge", "lib/ui/mod.fge", "lib/ui/components.fge", "lib/ui/file_explorer.fge", "lib/ui/repl.fge"]
+    },
+    "sdl": {
+      "name": "sdl",
+      "version": "1.0.0",
+      "description": "Forge SDL2 bindings (cross-platform windowing and graphics)",
+      "author": "Forge Team",
+      "license": "MIT",
+      "url": "https://github.com/Nohat1337/FORGE/tree/main/lib/sdl",
+      "files": []
+    },
+    "json": {
+      "name": "json",
+      "version": "0.1.0",
+      "description": "JSON parser and serializer for Forge",
+      "author": "Forge Team",
+      "license": "MIT",
+      "url": "https://github.com/Nohat1337/FORGE/tree/main/lib/json",
+      "files": []
+    },
+    "net": {
+      "name": "net",
+      "version": "0.1.0",
+      "description": "Networking library for Forge (HTTP, sockets)",
+      "author": "Forge Team",
+      "license": "MIT",
+      "url": "https://github.com/Nohat1337/FORGE/tree/main/lib/net",
+      "files": []
+    }
+  }
+}
