@@ -24,6 +24,7 @@ enum class CPTag : uint8_t {
     DOUBLE = 6,
     CLASS = 7,
     STRING = 8,
+    BOOLEAN = 9,
     METHODREF = 10,
     NAME_AND_TYPE = 12,
     FORGE_METHOD = 200,
@@ -78,7 +79,11 @@ struct MethodInfo {
     std::vector<uint8_t> bytecode;
     uint16_t maxStack = 0;
     uint16_t maxLocals = 0;
+    uint16_t arity = 0;
+    uint16_t upvalueCount = 0;
     std::vector<ExceptionHandler> exceptionTable;
+    uint16_t constantPoolOffset = 0; // starting index of this method's constants in the shared CP
+    uint16_t constantPoolCount = 0;  // number of constants this method uses
 };
 
 struct ClassFile {
@@ -94,7 +99,8 @@ struct ClassFile {
     std::vector<MethodInfo> methods;
     std::vector<AttributeInfo> attributes;
 
-    bool load(const std::vector<uint8_t>& data);
+    bool load(const uint8_t* data, size_t len);
+    bool load(const std::vector<uint8_t>& data) { return load(data.data(), data.size()); }
     bool save(std::vector<uint8_t>& data) const;
     std::string getUtf8(uint16_t index) const;
     std::string getClassName(uint16_t index) const;

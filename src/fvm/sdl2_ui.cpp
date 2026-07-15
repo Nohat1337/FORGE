@@ -593,6 +593,159 @@ void defineSDL2Module(ForgeVM& vm) {
             return FValue::boolean(ui.saveScreenshot(path));
         }, "sdl.screenshot"));
 
+    // ============================================================
+    // Extended UI primitives (buttons, links, clipboard, etc.)
+    // ============================================================
+
+    // sdl.button(x, y, w, h, label, r, g, b, mx, my, mpressed) -> bool
+    mod->entries["button"] = FValue::obj(new GCNative(
+        [&ui](const std::vector<FValue>& args) -> FValue {
+            int x = (int)args[0].asInteger(), y = (int)args[1].asInteger();
+            int w = (int)args[2].asInteger(), h = (int)args[3].asInteger();
+            std::string label = args[4].toString();
+            uint8_t r = (uint8_t)args[5].asInteger(), g = (uint8_t)args[6].asInteger(), b = (uint8_t)args[7].asInteger();
+            int mx = args.size() > 8 ? (int)args[8].asInteger() : 0;
+            int my = args.size() > 9 ? (int)args[9].asInteger() : 0;
+            bool mpressed = args.size() > 10 ? args[10].isTruthy() : false;
+            SDLMouseEvent mouse;
+            mouse.x = mx; mouse.y = my; mouse.pressed = mpressed; mouse.button = 1;
+            bool hover = mx >= x && mx <= x + w && my >= y && my <= y + h;
+            return FValue::boolean(ui.button(x, y, w, h, label, r, g, b, mouse, hover));
+        }, "sdl.button"));
+
+    // sdl.link(x, y, text, url, r, g, b, mx, my, mpressed) -> bool
+    mod->entries["link"] = FValue::obj(new GCNative(
+        [&ui](const std::vector<FValue>& args) -> FValue {
+            int x = (int)args[0].asInteger(), y = (int)args[1].asInteger();
+            std::string text = args[2].toString();
+            std::string url = args[3].toString();
+            uint8_t r = (uint8_t)args[4].asInteger(), g = (uint8_t)args[5].asInteger(), b = (uint8_t)args[6].asInteger();
+            int mx = args.size() > 7 ? (int)args[7].asInteger() : 0;
+            int my = args.size() > 8 ? (int)args[8].asInteger() : 0;
+            bool mpressed = args.size() > 9 ? args[9].isTruthy() : false;
+            int tw = ui.textWidth(text);
+            bool hover = mx >= x && mx <= x + tw && my >= y && my <= y + ui.textHeight();
+            // Draw underlined text
+            uint8_t dr = hover ? 100 : r, dg = hover ? 160 : g, db = hover ? 255 : b;
+            ui.drawText(x, y, text, dr, dg, db, 255);
+            ui.drawLine(x, y + ui.textHeight(), x + tw, y + ui.textHeight(), dr, dg, db, 255);
+            // On click, open URL
+            if (hover && mpressed) {
+#ifdef __APPLE__
+                std::string cmd = "open \"" + url + "\" &";
+#elif _WIN32
+                std::string cmd = "start \"" + url + "\"";
+#else
+                std::string cmd = "xdg-open \"" + url + "\" &";
+#endif
+                system(cmd.c_str());
+            }
+            return FValue::boolean(hover && mpressed);
+        }, "sdl.link"));
+
+    // sdl.clipboard_get() -> string
+    mod->entries["clipboard_get"] = FValue::obj(new GCNative(
+        [&ui](const std::vector<FValue>&) -> FValue {
+            const char* text = SDL_GetClipboardText();
+            if (!text) return FValue::obj(new GCString(""));
+            return FValue::obj(new GCString(std::string(text)));
+        }, "sdl.clipboard_get"));
+
+    // sdl.clipboard_set(text)
+    mod->entries["clipboard_set"] = FValue::obj(new GCNative(
+        [&ui](const std::vector<FValue>& args) -> FValue {
+            std::string text = args.size() > 0 ? args[0].toString() : "";
+            SDL_SetClipboardText(text.c_str());
+            return FValue::nil();
+        }, "sdl.clipboard_set"));
+
+    // sdl.text_selection(x, y, w, h, text, sel_start, sel_end, fg_r, fg_g, fg_b, bg_r, bg_g, bg_b, sel_r, sel_g, sel_b)
+    mod->entries["text_selection"] = FValue::obj(new GCNative(
+        [&ui](const std::vector<FValue>& args) -> FValue {
+            int x = (int)args[0].asInteger(), y = (int)args[1].asInteger();
+            int w = (int)args[2].asInteger(), h = (int)args[3].asInteger();
+            std::string text = args[4].toString();
+            int selStart = args.size() > 5 ? (int)args[5].asInteger() : 0;
+            int selEnd = args.size() > 6 ? (int)args[6].asInteger() : 0;
+            uint8_t fgR = args.size() > 7 ? (uint8_t)args[7].asInteger() : 255;
+            uint8_t fgG = args.size() > 8 ? (uint8_t)args[8].asInteger() : 255;
+            uint8_t fgB = args.size() > 9 ? (uint8_t)args[9].asInteger() : 255;
+            uint8_t bgR = args.size() > 10 ? (uint8_t)args[10].asInteger() : 30;
+            uint8_t bgG = args.size() > 11 ? (uint8_t)args[11].asInteger() : 30;
+            uint8_t bgB = args.size() > 12 ? (uint8_t)args[12].asInteger() : 40;
+            uint8_t selR = args.size() > 13 ? (uint8_t)args[13].asInteger() : 70;
+            uint8_t selG = args.size() > 14 ? (uint8_t)args[14].asInteger() : 130;
+            uint8_t selB = args.size() > 15 ? (uint8_t)args[15].asInteger() : 230;
+
+            // Draw background
+            ui.drawRect(x, y, w, h, bgR, bgG, bgB, 255);
+
+            // Draw selection highlight
+            if (selStart != selEnd && selStart >= 0 && selEnd > 0) {
+                int s = std::min(selStart, selEnd);
+                int e = std::max(selStart, selEnd);
+                s = std::max(0, s);
+                e = std::min((int)text.size(), e);
+                int sx = x + s * 8;
+                int sw = (e - s) * 8;
+                ui.drawRect(sx, y, sw, h, selR, selG, selB, 255);
+            }
+
+            // Draw text
+            ui.drawText(x, y, text, fgR, fgG, fgB, 255);
+            return FValue::nil();
+        }, "sdl.text_selection"));
+
+    // sdl.rounded_rect(x, y, w, h, r, g, b, radius)
+    mod->entries["rounded_rect"] = FValue::obj(new GCNative(
+        [&ui](const std::vector<FValue>& args) -> FValue {
+            int x = (int)args[0].asInteger(), y = (int)args[1].asInteger();
+            int w = (int)args[2].asInteger(), h = (int)args[3].asInteger();
+            uint8_t r = (uint8_t)args[4].asInteger(), g = (uint8_t)args[5].asInteger(), b = (uint8_t)args[6].asInteger();
+            int radius = args.size() > 7 ? (int)args[7].asInteger() : 4;
+            ui.drawRoundedRect(x, y, w, h, radius, r, g, b, 255);
+            return FValue::nil();
+        }, "sdl.rounded_rect"));
+
+    // sdl.rounded_rect_outline(x, y, w, h, r, g, b, radius)
+    mod->entries["rounded_rect_outline"] = FValue::obj(new GCNative(
+        [&ui](const std::vector<FValue>& args) -> FValue {
+            int x = (int)args[0].asInteger(), y = (int)args[1].asInteger();
+            int w = (int)args[2].asInteger(), h = (int)args[3].asInteger();
+            uint8_t r = (uint8_t)args[4].asInteger(), g = (uint8_t)args[5].asInteger(), b = (uint8_t)args[6].asInteger();
+            int radius = args.size() > 7 ? (int)args[7].asInteger() : 4;
+            ui.drawRoundedRectOutline(x, y, w, h, radius, r, g, b, 255);
+            return FValue::nil();
+        }, "sdl.rounded_rect_outline"));
+
+    // sdl.gradient(x, y, w, h, r1, g1, b1, r2, g2, b2)
+    mod->entries["gradient"] = FValue::obj(new GCNative(
+        [&ui](const std::vector<FValue>& args) -> FValue {
+            int x = (int)args[0].asInteger(), y = (int)args[1].asInteger();
+            int w = (int)args[2].asInteger(), h = (int)args[3].asInteger();
+            uint8_t r1 = (uint8_t)args[4].asInteger(), g1 = (uint8_t)args[5].asInteger(), b1 = (uint8_t)args[6].asInteger();
+            uint8_t r2 = (uint8_t)args[7].asInteger(), g2 = (uint8_t)args[8].asInteger(), b2 = (uint8_t)args[9].asInteger();
+            ui.drawGradientV(x, y, w, h, r1, g1, b1, r2, g2, b2, 255);
+            return FValue::nil();
+        }, "sdl.gradient"));
+
+    // sdl.shadow(x, y, w, h, radius, alpha)
+    mod->entries["shadow"] = FValue::obj(new GCNative(
+        [&ui](const std::vector<FValue>& args) -> FValue {
+            int x = (int)args[0].asInteger(), y = (int)args[1].asInteger();
+            int w = (int)args[2].asInteger(), h = (int)args[3].asInteger();
+            int radius = args.size() > 4 ? (int)args[4].asInteger() : 8;
+            uint8_t a = args.size() > 5 ? (uint8_t)args[5].asInteger() : 60;
+            ui.drawShadow(x, y, w, h, radius, a);
+            return FValue::nil();
+        }, "sdl.shadow"));
+
+    // sdl.text_height() -> int
+    mod->entries["text_height"] = FValue::obj(new GCNative(
+        [&ui](const std::vector<FValue>&) -> FValue {
+            return FValue::integer(ui.textHeight());
+        }, "sdl.text_height"));
+
     vm.defineModule("sdl", mod);
 }
 

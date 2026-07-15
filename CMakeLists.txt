@@ -14,8 +14,10 @@ add_executable(forge
     src/compiler.cpp
     src/optimizer.cpp
     src/fvm/runtime.cpp
+    src/fvm/classfile.cpp
     src/fvm/sdl2_ui.cpp
     src/fvm/sdl_fvm_ui.cpp
+    src/fvm/forge_ide.cpp
     src/pkg_manager.cpp
 )
 
@@ -35,8 +37,10 @@ add_executable(forgevm
     src/compiler.cpp
     src/optimizer.cpp
     src/fvm/runtime.cpp
+    src/fvm/classfile.cpp
     src/fvm/sdl2_ui.cpp
     src/fvm/sdl_fvm_ui.cpp
+    src/fvm/forge_ide.cpp
     src/pkg_manager.cpp
     src/forge_build.cpp
 )

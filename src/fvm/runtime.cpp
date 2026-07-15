@@ -1125,6 +1125,156 @@ bool ForgeVM::interpretSource(const std::string& source, const std::string& file
 }
 
 // ============================================================
+// .fclass binary loading & execution
+// ============================================================
+
+static std::vector<uint8_t> readFileBytes(const std::string& path) {
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f.is_open()) throw std::runtime_error("Cannot open file: " + path);
+    size_t size = f.tellg();
+    f.seekg(0, std::ios::beg);
+    std::vector<uint8_t> data(size);
+    f.read(reinterpret_cast<char*>(data.data()), size);
+    return data;
+}
+
+bool ForgeVM::interpretClassFile(const std::string& path) {
+    try {
+        auto data = readFileBytes(path);
+        ClassFile cf;
+        if (!cf.load(data.data(), data.size())) {
+            std::cerr << "Error: Invalid .fclass file: " << path << "\n";
+            return false;
+        }
+        return interpretClassFileData(cf, path);
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << "\n";
+        return false;
+    }
+}
+
+bool ForgeVM::interpretClassFileData(const ClassFile& cf, const std::string& filename) {
+    // Phase 1: Create ObjFunction objects for each method
+    // (valueToFValue converts these to GCFunction at runtime)
+    std::vector<ObjFunction*> methodFns(cf.methods.size(), nullptr);
+    for (size_t mi = 0; mi < cf.methods.size(); mi++) {
+        auto& method = cf.methods[mi];
+        if (method.bytecode.empty()) continue;
+        auto* ofn = new ObjFunction();
+        if (method.nameIndex > 0 && method.nameIndex < cf.constantPool.size()
+            && cf.constantPool[method.nameIndex].tag == CPTag::UTF8) {
+            ofn->name = cf.getUtf8(method.nameIndex);
+        } else {
+            ofn->name = "method_" + std::to_string(mi);
+        }
+        ofn->arity = method.arity;
+        ofn->upvalueCount = method.upvalueCount;
+        ofn->localCount = method.maxLocals;
+        ofn->chunkPtr = std::make_shared<Chunk>();
+        ofn->chunkPtr->code = method.bytecode;
+        ofn->chunkPtr->lines.resize(method.bytecode.size(), 1);
+        ofn->chunk = ofn->chunkPtr.get();
+        methodFns[mi] = ofn;
+    }
+
+    // Phase 2: Build per-method chunk constants from their CP slices
+    for (size_t mi = 0; mi < cf.methods.size(); mi++) {
+        if (!methodFns[mi]) continue;
+        auto& method = cf.methods[mi];
+        auto* ofn = methodFns[mi];
+
+        uint16_t offset = method.constantPoolOffset;
+        uint16_t count = method.constantPoolCount;
+        if (count == 0 && offset == 0) {
+            offset = 1;
+            count = (uint16_t)(cf.constantPool.size() - 1);
+        }
+
+        ofn->chunk->constants.clear();
+        ofn->chunk->constants.reserve(count);
+        for (uint16_t ci = 0; ci < count; ci++) {
+            size_t cpIdx = offset + ci;
+            if (cpIdx >= cf.constantPool.size()) {
+                ofn->chunk->constants.push_back(Value::nil());
+                continue;
+            }
+            auto& cp = cf.constantPool[cpIdx];
+            switch (cp.tag) {
+                case CPTag::UTF8:
+                    ofn->chunk->constants.push_back(
+                        Value::obj(std::make_shared<ObjString>(cp.getUtf8())));
+                    break;
+                case CPTag::INTEGER:
+                    ofn->chunk->constants.push_back(Value::integer(cp.getInteger()));
+                    break;
+                case CPTag::FLOAT:
+                    ofn->chunk->constants.push_back(Value::floating(cp.getFloat()));
+                    break;
+                case CPTag::LONG:
+                    ofn->chunk->constants.push_back(Value::integer(cp.getLong()));
+                    break;
+                case CPTag::DOUBLE:
+                    ofn->chunk->constants.push_back(Value::floating(cp.getDouble()));
+                    break;
+                case CPTag::BOOLEAN:
+                    ofn->chunk->constants.push_back(Value::boolean(cp.data[0] != 0));
+                    break;
+                case CPTag::STRING:
+                    ofn->chunk->constants.push_back(
+                        Value::obj(std::make_shared<ObjString>(cf.getUtf8(cp.getStringIndex()))));
+                    break;
+                case CPTag::FORGE_METHOD: {
+                    uint16_t targetIdx = (uint16_t)((cp.data[0] << 8) | cp.data[1]);
+                    if (targetIdx < methodFns.size() && methodFns[targetIdx]) {
+                        ofn->chunk->constants.push_back(
+                            Value::obj(std::shared_ptr<ObjFunction>(methodFns[targetIdx],
+                                [](ObjFunction*){})));
+                    } else {
+                        ofn->chunk->constants.push_back(Value::nil());
+                    }
+                    break;
+                }
+                default:
+                    ofn->chunk->constants.push_back(Value::nil());
+                    break;
+            }
+        }
+    }
+
+    // Find the first method with bytecode to execute
+    ObjFunction* mainFn = nullptr;
+    for (size_t mi = 0; mi < methodFns.size(); mi++) {
+        if (methodFns[mi]) {
+            mainFn = methodFns[mi];
+            break;
+        }
+    }
+
+    if (!mainFn) {
+        std::cerr << "Error: No executable methods in .fclass file.\n";
+        return false;
+    }
+
+    // Register non-main methods as globals (if they have unique names)
+    for (size_t mi = 0; mi < methodFns.size(); mi++) {
+        if (!methodFns[mi] || methodFns[mi] == mainFn) continue;
+        auto* ofn = methodFns[mi];
+        if (!ofn->name.empty() && ofn->name != mainFn->name) {
+            auto sharedFn = std::shared_ptr<ObjFunction>(ofn, [](ObjFunction*){});
+            globals_[ofn->name] = valueToFValue(Value::obj(sharedFn));
+        }
+    }
+
+    // Convert main function to GCFunction via valueToFValue
+    auto mainShared = std::shared_ptr<ObjFunction>(mainFn, [](ObjFunction*){});
+    FValue gcMain = valueToFValue(Value::obj(mainShared));
+
+    std::cerr << "Running " << filename << " (" << mainFn->chunk->code.size() << " bytes)\n";
+    auto sharedFn = std::shared_ptr<GCFunction>(gcMain.asFunction(), [](GCFunction*){});
+    return interpret(sharedFn);
+}
+
+// ============================================================
 // Native Methods & Builtins
 // ============================================================
 
