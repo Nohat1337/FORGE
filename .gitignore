@@ -10,3 +10,4 @@ build_test/
 compile_commands.json
 .opencode/
 assets/*.bmp
+models/*.gguf
