@@ -1,4 +1,6 @@
 #include "llm.hpp"
+#include "gguf_loader.hpp"
+#include "faw.hpp"
 #include <fstream>
 #include <iostream>
 #include <filesystem>
@@ -8,6 +10,8 @@
 #include <optional>
 
 namespace forge::llm {
+
+using ::forge::fvm::g_llama;
 
 // ============================================================================
 // DATASET IMPLEMENTATION
@@ -2154,6 +2158,231 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
         g_coder.load(args[0].asString()->value);
         return ::forge::fvm::FValue::nil();
     }, "llm.nh2coder_load"));
+
+    // ========================================================================
+    // GGUF Model Functions (real pretrained LLM inference)
+    // ========================================================================
+
+    // llm.load_gguf(path) -> string (model info)
+    llmMod->entries["load_gguf"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
+        if (args.size() < 1) throw std::runtime_error("llm.load_gguf() expects 1 argument (path to .gguf file)");
+        std::string path = args[0].asString()->value;
+        if (!g_llama.loadFromGGUF(path)) {
+            return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: Failed to load GGUF model from " + path + "]"));
+        }
+        std::ostringstream info;
+        info << "Loaded: " << g_llama.config.modelName << "\n"
+             << "Arch: " << g_llama.config.archName << "\n"
+             << "Layers: " << g_llama.config.nLayers << ", Heads: " << g_llama.config.nHeads
+             << "/" << g_llama.config.nKVHeads << "\n"
+             << "dModel: " << g_llama.config.dModel << ", headDim: " << g_llama.config.headDim << "\n"
+             << "Vocab: " << g_llama.config.vocabSize << ", Context: " << g_llama.config.contextLength;
+        return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString(info.str()));
+    }, "llm.load_gguf"));
+
+    // llm.generate(prompt, maxTokens?, temp?, topK?, topP?) -> string
+    llmMod->entries["generate"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
+        if (args.size() < 1) throw std::runtime_error("llm.generate() expects 1+ arguments (prompt)");
+        if (!g_llama.loaded) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: No model loaded. Call llm.load_gguf(path) first]"));
+        
+        std::string prompt = args[0].asString()->value;
+        int maxTokens = args.size() > 1 ? (int)args[1].asInteger() : 256;
+        float temp = args.size() > 2 ? (float)args[2].asNumber() : 0.8f;
+        int topK = args.size() > 3 ? (int)args[3].asInteger() : 40;
+        float topP = args.size() > 4 ? (float)args[4].asNumber() : 0.9f;
+        
+        auto tokens = g_llama.tokenize(prompt);
+        auto generated = g_llama.generate(tokens, maxTokens, temp, topK, topP);
+        return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString(g_llama.detokenize(generated)));
+    }, "llm.generate"));
+
+    // llm.model_info() -> string
+    llmMod->entries["model_info"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
+        if (!g_llama.loaded) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[No GGUF model loaded]"));
+        std::ostringstream info;
+        info << g_llama.config.modelName << " (" << g_llama.config.archName << ")\n"
+             << "Layers: " << g_llama.config.nLayers << "\n"
+             << "Heads: " << g_llama.config.nHeads << " Q / " << g_llama.config.nKVHeads << " KV\n"
+             << "dModel: " << g_llama.config.dModel << "\n"
+             << "Vocab: " << g_llama.config.vocabSize << "\n"
+             << "Context: " << g_llama.config.contextLength;
+        return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString(info.str()));
+    }, "llm.model_info"));
+
+    // ========================================================================
+    // LoRA Fine-tuning
+    // ========================================================================
+
+    // llm.enable_lora(rank?, alpha?) -> string
+    llmMod->entries["enable_lora"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
+        if (!g_llama.loaded) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: No model loaded]"));
+        int rank = args.size() > 0 ? (int)args[0].asInteger() : 16;
+        float alpha = args.size() > 1 ? (float)args[1].asNumber() : 16.0f;
+        g_llama.enableLoRA(rank, alpha);
+        return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("LoRA enabled: rank=" + std::to_string(rank)));
+    }, "llm.enable_lora"));
+
+    // llm.lora_train(text, steps?, lr?) -> string (training log)
+    llmMod->entries["lora_train"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
+        if (!g_llama.loaded) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: No model loaded]"));
+        if (!g_llama.loraEnabled) g_llama.enableLoRA();
+        if (args.size() < 1) throw std::runtime_error("llm.lora_train() expects 1+ arguments (text)");
+        std::string text = args[0].asString()->value;
+        int steps = args.size() > 1 ? (int)args[1].asInteger() : 100;
+        float lr = args.size() > 2 ? (float)args[2].asNumber() : 1e-4f;
+
+        auto tokens = g_llama.tokenize(text);
+        if (tokens.size() < 2) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: Text too short]"));
+
+        std::ostringstream log;
+        log << "Training on " << tokens.size() << " tokens for " << steps << " steps\n";
+        for (int s = 0; s < steps; s++) {
+            float loss = g_llama.trainStep(tokens, lr);
+            if (s % 10 == 0 || s == steps - 1)
+                log << "step=" << s << " loss=" << loss << "\n";
+        }
+        log << "Training complete. LoRA params: " << g_llama.loraLayers[0].paramCount() * g_llama.config.nLayers;
+        return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString(log.str()));
+    }, "llm.lora_train"));
+
+    // llm.save_lora(path) -> nil
+    llmMod->entries["save_lora"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
+        if (!g_llama.loraEnabled) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: LoRA not enabled]"));
+        std::string path = args.size() > 0 ? args[0].asString()->value : "./lora_adapter";
+        g_llama.saveLoRA(path);
+        return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("LoRA saved to " + path));
+    }, "llm.save_lora"));
+
+    // llm.load_lora(path) -> string
+    llmMod->entries["load_lora"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
+        if (!g_llama.loaded) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: No model loaded]"));
+        std::string path = args.size() > 0 ? args[0].asString()->value : "./lora_adapter";
+        g_llama.loadLoRA(path);
+        return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("LoRA loaded from " + path));
+    }, "llm.load_lora"));
+
+    // llm.merge_lora() -> string
+    llmMod->entries["merge_lora"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>&) -> ::forge::fvm::FValue {
+        if (!g_llama.loraEnabled) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: LoRA not enabled]"));
+        g_llama.mergeLoRA();
+        return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("LoRA merged into base model"));
+    }, "llm.merge_lora"));
+
+    // llm.disable_lora() -> string
+    llmMod->entries["disable_lora"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>&) -> ::forge::fvm::FValue {
+        g_llama.disableLoRA();
+        return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("LoRA disabled"));
+    }, "llm.disable_lora"));
+
+    // ========================================================================
+    // Real Embeddings
+    // ========================================================================
+
+    // llm.embed_real(text) -> array of floats (real GGUF embeddings)
+    llmMod->entries["embed_real"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
+        if (!g_llama.loaded) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: No model loaded]"));
+        if (args.size() < 1) throw std::runtime_error("llm.embed_real() expects 1 argument (text)");
+        std::string text = args[0].asString()->value;
+        auto emb = g_llama.embed(text);
+        auto* arr = new ::forge::fvm::GCArray();
+        for (float v : emb) arr->elements.push_back(::forge::fvm::FValue::floating(v));
+        return ::forge::fvm::FValue::obj(arr);
+    }, "llm.embed_real"));
+
+    // llm.similarity_real(text1, text2) -> float (cosine similarity via GGUF embeddings)
+    llmMod->entries["similarity_real"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
+        if (!g_llama.loaded) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: No model loaded]"));
+        if (args.size() < 2) throw std::runtime_error("llm.similarity_real() expects 2 arguments");
+        float sim = g_llama.similarity(args[0].asString()->value, args[1].asString()->value);
+        return ::forge::fvm::FValue::floating(sim);
+    }, "llm.similarity_real"));
+
+    // ========================================================================
+    // FAW - Forge Agent Wrap
+    // ========================================================================
+
+    // faw.init(model_name?, max_iter?, temperature?) -> string
+    llmMod->entries["faw_init"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
+        if (!g_llama.loaded) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: No model loaded. Call llm.load_gguf() first]"));
+        ::forge::fvm::AgentConfig cfg;
+        cfg.maxIterations = args.size() > 1 ? (int)args[1].asInteger() : 10;
+        cfg.temperature = args.size() > 2 ? (float)args[2].asNumber() : 0.3f;
+        ::forge::fvm::g_agent.init(&g_llama, cfg);
+        std::string name = args.size() > 0 ? args[0].asString()->value : g_llama.config.modelName;
+        g_llama.setCustomName(name);
+        return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("FAW agent initialized with model: " + name));
+    }, "llm.faw_init"));
+
+    // faw.chat(message) -> string (single agent step)
+    llmMod->entries["faw_chat"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
+        if (args.size() < 1) throw std::runtime_error("llm.faw_chat() expects 1 argument (message)");
+        if (!g_llama.loaded) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: No model loaded]"));
+        std::string msg = args[0].asString()->value;
+        std::string response = ::forge::fvm::g_agent.step(msg);
+        return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString(response));
+    }, "llm.faw_chat"));
+
+    // faw.run(message) -> string (full agent loop)
+    llmMod->entries["faw_run"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
+        if (args.size() < 1) throw std::runtime_error("llm.faw_run() expects 1 argument (message)");
+        if (!g_llama.loaded) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: No model loaded]"));
+        std::string msg = args[0].asString()->value;
+        std::string response = ::forge::fvm::g_agent.run(msg);
+        return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString(response));
+    }, "llm.faw_run"));
+
+    // faw.clear() -> nil
+    llmMod->entries["faw_clear"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>&) -> ::forge::fvm::FValue {
+        ::forge::fvm::g_agent.clearHistory();
+        return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("Agent history cleared"));
+    }, "llm.faw_clear"));
+
+    // faw.tools() -> string (list available tools)
+    llmMod->entries["faw_tools"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>&) -> ::forge::fvm::FValue {
+        std::string tools;
+        tools += "FAW Built-in Tools:\n";
+        tools += "- web_search: Search the web (query)\n";
+        tools += "- read_file: Read file contents (path)\n";
+        tools += "- write_file: Write to file (path, content)\n";
+        tools += "- execute_command: Run shell command (command)\n";
+        tools += "- get_time: Current date/time\n";
+        tools += "- calculate: Math expression (expression)\n";
+        tools += "- list_files: Directory listing (path)\n";
+        tools += "- memory: Store/retrieve info (action, key, value)\n";
+        return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString(tools));
+    }, "llm.faw_tools"));
+
+    // ========================================================================
+    // Model Creation Pipeline (for user's custom models)
+    // ========================================================================
+
+    // llm.create_model(name, gguf_path) -> string (creates user's named model)
+    llmMod->entries["create_model"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
+        if (args.size() < 2) throw std::runtime_error("llm.create_model() expects 2 arguments (name, gguf_path)");
+        std::string name = args[0].asString()->value;
+        std::string path = args[1].asString()->value;
+        if (!g_llama.loadFromGGUF(path)) {
+            return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: Failed to load " + path + "]"));
+        }
+        g_llama.setCustomName(name);
+        std::ostringstream info;
+        info << "Model '" << name << "' created from " << path << "\n"
+             << "Arch: " << g_llama.config.archName << "\n"
+             << "Layers: " << g_llama.config.nLayers << ", dModel: " << g_llama.config.dModel << "\n"
+             << "Ready for fine-tuning with llm.enable_lora() and llm.lora_train()\n"
+             << "Wrap with agent: llm.faw_init(\"" << name << "\")";
+        return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString(info.str()));
+    }, "llm.create_model"));
+
+    // llm.save_model(path) -> string
+    llmMod->entries["save_model"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
+        if (!g_llama.loaded) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: No model loaded]"));
+        std::string path = args.size() > 0 ? args[0].asString()->value : "./my_model";
+        if (g_llama.loraEnabled) g_llama.mergeLoRA();
+        g_llama.saveLoRA(path);
+        std::string name = g_llama.customName.empty() ? g_llama.config.modelName : g_llama.customName;
+        return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("Model '" + name + "' saved to " + path));
+    }, "llm.save_model"));
 
     vm.defineModule("llm", llmMod);
 }

@@ -1,0 +1,13 @@
+import "llm"
+
+let info = llm.load_gguf("/home/nohat1337/c++-fork/models/SmolLM-135M.Q8_0.gguf")
+print("Model loaded: " + info)
+
+// Greedy generation, 20 tokens
+print("Greedy gen 20:")
+let r1 = llm.generate("The capital of France is", 20, 0.01, 0, 1.0)
+print(r1)
+
+print("Greedy gen 20 prompt2:")
+let r2 = llm.generate("Hello, my name is", 20, 0.01, 0, 1.0)
+print(r2)

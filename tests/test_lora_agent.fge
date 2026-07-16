@@ -1,0 +1,47 @@
+import "llm"
+
+let modelInfo = llm.load_gguf("/home/nohat1337/c++-fork/models/SmolLM-135M.Q8_0.gguf")
+print(modelInfo)
+
+// 1. Test real embeddings
+let sim = llm.similarity_real("The cat sat on the mat", "A feline rested on the rug")
+print("Similarity: " + str(sim))
+
+// 2. Test LoRA fine-tuning (just 3 steps)
+print("=== LoRA Training ===")
+llm.enable_lora(8, 8.0)
+
+let trainText = "The capital of France is Paris. The capital of Germany is Berlin."
+let trainResult = llm.lora_train(trainText, 3, 0.0001)
+print(trainResult)
+
+// 3. Generate after LoRA (short)
+let genResult = llm.generate("The capital of Italy is", 15, 0.1, 1, 0.9)
+print("After LoRA: " + genResult)
+
+// 4. Save LoRA
+llm.save_lora("/home/nohat1337/c++-fork/build_test/test_lora_adapter")
+llm.disable_lora()
+
+// 5. Test FAW agent init
+print("=== FAW Agent ===")
+let fawResult = llm.faw_init("MyBot", 2, 0.3)
+print(fawResult)
+
+let tools = llm.faw_tools()
+print(tools)
+
+// 6. Single step only (chat, not full run)
+let stepResult = llm.faw_chat("What is 2+2?")
+print("Agent chat: " + stepResult)
+
+// 7. Create user's custom model pipeline
+print("=== Model Creation Pipeline ===")
+let myModel = llm.create_model("NohatCoder", "/home/nohat1337/c++-fork/models/SmolLM-135M.Q8_0.gguf")
+print(myModel)
+
+// 8. Generate with custom model (short)
+let output = llm.generate("Hello world", 20, 0.7, 40, 0.9)
+print("Custom model: " + output)
+
+print("All tests passed!")

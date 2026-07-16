@@ -1,0 +1,5 @@
+import "llm"
+let info = llm.load_gguf("/home/nohat1337/c++-fork/models/SmolLM-135M.Q8_0.gguf")
+print(info)
+let r = llm.generate("A", 3, 0.01, 0, 1.0)
+print("Result: [" + r + "]")

@@ -1,0 +1,12 @@
+import "llm"
+let info = llm.load_gguf("/home/nohat1337/c++-fork/models/SmolLM-135M.Q8_0.gguf")
+print(info)
+print("---")
+let r1 = llm.generate("The capital of France is", 30, 0.01, 0, 1.0)
+print("Prompt1: " + r1)
+print("---")
+let r2 = llm.generate("Once upon a time", 30, 0.01, 0, 1.0)
+print("Prompt2: " + r2)
+print("---")
+let r3 = llm.generate("Hello, my name is", 30, 0.01, 0, 1.0)
+print("Prompt3: " + r3)

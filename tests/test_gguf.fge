@@ -1,0 +1,19 @@
+// Test GGUF model loading and inference
+import "llm"
+
+print("=== GGUF Model Test ===")
+
+// Load the model
+let info = llm.load_gguf("/home/nohat1337/c++-fork/models/SmolLM-135M.Q8_0.gguf")
+print("Model loaded: " + info)
+
+// Check model info
+let mi = llm.model_info()
+print("Model details: " + mi)
+
+// Generate text
+print("Generating text...")
+let result = llm.generate("Once upon a time", 64, 0.8, 40, 0.9)
+print("Generated: " + result)
+
+print("=== Done ===")
