@@ -64,6 +64,7 @@ set(COMMON_SOURCES
     src/fvm/actors.cpp
     src/fvm/llm.cpp
     src/fvm/forge_compute.cpp
+    src/fvm/hf_converter.cpp
     src/pkg_manager.cpp
 )
 

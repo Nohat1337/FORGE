@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <numeric>
 #include <execution>
+#include <unordered_set>
 
 namespace forge::llm {
 
