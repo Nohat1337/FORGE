@@ -191,13 +191,18 @@ struct ModelConfig {
 struct Linear {
     std::vector<float> weight;
     std::vector<float> bias;
-    int inFeatures, outFeatures;
+    int inFeatures = 0, outFeatures = 0;
     bool hasBias = true;
     
     // LoRA parameters
-    std::vector<float> loraA, loraB;  // Low-rank adaptation
+    std::vector<float> loraA, loraB;
     int loraRank = 0;
     float loraScale = 1.0f;
+    
+    // Gradient storage
+    std::vector<float> dWeight, dBias;
+    // Cached for backward (mutable so const forward can populate)
+    mutable std::vector<float> lastInput;
     
     Linear() = default;
     Linear(int inF, int outF, bool useBias = true) : inFeatures(inF), outFeatures(outF), hasBias(useBias) {
@@ -208,16 +213,16 @@ struct Linear {
     void forward(const float* input, float* output) const;
     void forwardWithLoRA(const float* input, float* output) const;
     
+    // Backward: given gradOut [outFeatures], compute gradIn [inFeatures] and accumulate dWeight/dBias
+    void backward(const float* gradOut, float* gradIn);
+    void zeroGrad();
+    
     void initXavier(float scale = 0.02f);
     void initZero();
     
-    // LoRA initialization
     void initLoRA(int rank, float alpha, float dropout);
-    
-    // Merge LoRA weights into main weights
     void mergeLoRA();
     
-    // Save/load
     void save(std::ofstream& f) const;
     void load(std::ifstream& f);
 };
@@ -227,6 +232,11 @@ struct LayerNorm {
     int features;
     float eps = 1e-5f;
     
+    // Gradient storage
+    std::vector<float> dWeight, dBias;
+    // Cached for backward (mutable so const forward can populate)
+    mutable std::vector<float> lastInput, lastOutput;
+    
     LayerNorm() = default;
     LayerNorm(int f, float e = 1e-5f) : features(f), eps(e) {
         weight.resize(f, 1.0f);
@@ -234,6 +244,8 @@ struct LayerNorm {
     }
     
     void forward(const float* input, float* output) const;
+    void backward(const float* gradOut, float* gradIn);
+    void zeroGrad();
     void save(std::ofstream& f) const;
     void load(std::ifstream& f);
 };
@@ -243,11 +255,19 @@ struct MultiHeadAttention {
     int numHeads, headDim;
     float scale;
     
+    // Cached for backward (mutable so const forward can populate them)
+    mutable std::vector<float> lastInput;
+    mutable std::vector<float> qCache, kCache, vCache;
+    mutable std::vector<float> attnWeights;
+    mutable std::vector<float> attnIntermediate; // pre-output-proj attention result
+    mutable int lastSeqLen = 0;
+    
     MultiHeadAttention() = default;
     MultiHeadAttention(int dModel, int numHeads_, int dFF, bool useBias = true);
     
-    // Forward: input [seqLen, dModel] -> output [seqLen, dModel]
     void forward(const float* input, float* output, int seqLen, int dModel, const float* mask = nullptr) const;
+    void backward(const float* gradOut, float* gradIn, int seqLen, int dModel);
+    void zeroGrad();
     
     void initXavier(float scale = 0.02f);
     void initLoRA(int rank, float alpha, float dropout);
@@ -257,14 +277,19 @@ struct MultiHeadAttention {
 };
 
 struct FeedForward {
-    Linear ff1, ff2;  // dModel -> dFF -> dModel
+    Linear ff1, ff2;
     int dFF = 0;
     float dropout = 0.1f;
+    
+    // Cached for backward (mutable so const forward can populate)
+    mutable std::vector<float> hiddenCache;
     
     FeedForward() = default;
     FeedForward(int dModel, int dFF_, bool useBias = true);
     
     void forward(const float* input, float* output, int seqLen, int dModel) const;
+    void backward(const float* gradOut, float* gradIn, int seqLen, int dModel);
+    void zeroGrad();
     
     void initXavier(float scale = 0.02f);
     void initLoRA(int rank, float alpha, float dropout);
@@ -279,10 +304,16 @@ struct TransformerBlock {
     FeedForward ff;
     float dropout = 0.1f;
     
+    // Cached for backward (mutable so const forward can populate)
+    mutable std::vector<float> ln1Out, attnOut, ln2Out;
+    mutable std::vector<float> blockInput;
+    
     TransformerBlock() = default;
     TransformerBlock(const ModelConfig& cfg);
     
     void forward(const float* input, float* output, int seqLen, int dModel, const float* mask = nullptr) const;
+    void backward(const float* gradOut, float* gradIn, int seqLen, int dModel);
+    void zeroGrad();
     
     void initLoRA(int rank, float alpha, float dropout);
     void mergeLoRA();
@@ -298,7 +329,10 @@ public:
     std::vector<float> posEmb;      // [maxSeqLen, dModel]
     std::vector<TransformerBlock> layers;
     LayerNorm lnFinal;
-    Linear head;  // Output projection (tied with tokenEmb if config.tieWeights)
+    Linear head;
+    
+    // Gradient storage for embeddings
+    std::vector<float> dTokenEmb, dPosEmb;
     
     TransformerModel() = default;
     TransformerModel(const ModelConfig& cfg) : config(cfg) { initialize(); }
@@ -308,38 +342,56 @@ public:
     // Forward pass - returns logits [seqLen, vocabSize]
     std::vector<float> forward(const std::vector<int>& tokens);
     
-    // Forward with pre-allocated buffers for training
+    // Forward + backward in one call: returns loss, fills all dWeight/dBias in-place
+    // tokens and targets must be same length (next-token prediction)
+    float forwardAndBackward(const std::vector<int>& tokens, const std::vector<int>& targets);
+    
+    // Compute cross-entropy loss from logits and targets (in-place on logits)
+    static float crossEntropyLoss(std::vector<float>& logits, const std::vector<int>& targets, int seqLen, int vocabSize);
+    
     void forwardTrain(const int* tokens, int batchSize, int seqLen, 
                      float* logits, float* loss = nullptr, const int* targets = nullptr);
     
-    // Generate tokens
     std::vector<int> generate(const std::vector<int>& prompt, int maxTokens, 
                              float temperature = 1.0f, int topK = 50, float topP = 0.9f);
     
-    // Training step (single batch)
     float trainStep(const int* inputTokens, const int* targetTokens, int batchSize, int seqLen, float lr);
     
-    // LoRA methods
     void enableLoRA(int rank, float alpha = 16, float dropout = 0.05f);
     void disableLoRA();
     void mergeLoRA();
     bool hasLoRA() const { return config.loraRank > 0; }
     
-    // Save/load
+    // Zero all gradients
+    void zeroGrad();
+    // Clip gradients globally
+    void clipGradients(float maxNorm);
+    // Adam step: update all params using accumulated dWeight/dBias
+    void adamStep(float lr, float beta1, float beta2, float eps, int t,
+                  std::vector<float>& m, std::vector<float>& v);
+    
     void save(const std::string& path) const;
     void load(const std::string& path);
     
-    // Model info
     size_t parameterCount() const;
     size_t trainableParameterCount() const;
     std::string summary() const;
     
+    // Flatten all parameters into a single vector (for Adam state)
+    void flattenParams(std::vector<float>& params) const;
+    void unflattenParams(const std::vector<float>& params);
+    // Flatten all gradients into a single vector
+    void flattenGrads(std::vector<float>& grads) const;
+    
 private:
-    // Temp buffers (reused across forward passes)
     mutable std::vector<float> temp1_, temp2_, temp3_, temp4_;
     mutable std::vector<float> q_, k_, v_, attnOut_;
     mutable std::vector<float> logits_;
     mutable std::vector<float> residual_;
+    
+    // Cached activations for backward
+    std::vector<std::vector<float>> embCache_;   // [seqLen, dModel] embeddings
+    std::vector<float> lnFinalOut_;              // [seqLen, dModel]
     
     void gelu(float* x, int n) const;
     void softmax(float* x, int n) const;
@@ -519,12 +571,101 @@ private:
 };
 
 // ============================================================================
+// NH-2-Coder MODEL
+// ============================================================================
+
+struct NH2CoderConfig {
+    std::string name = "NH-2-Coder";
+    int vocabSize = 8000;
+    int maxSeqLen = 512;
+    int dModel = 256;
+    int numHeads = 4;
+    int numLayers = 4;
+    int dFF = 1024;
+    float dropout = 0.1f;
+    float learningRate = 3e-4f;
+    int batchSize = 8;
+    int gradAccumSteps = 4;
+    float maxGradNorm = 1.0f;
+    int warmupSteps = 100;
+    int maxSteps = 5000;
+    
+    // Smaller config for quick demos
+    static NH2CoderConfig tiny() {
+        NH2CoderConfig c;
+        c.name = "NH-2-Coder-Tiny";
+        c.vocabSize = 4000;
+        c.dModel = 128;
+        c.numHeads = 2;
+        c.numLayers = 2;
+        c.dFF = 256;
+        c.maxSeqLen = 256;
+        c.batchSize = 4;
+        c.gradAccumSteps = 1;
+        return c;
+    }
+    
+    ModelConfig toModelConfig() const {
+        ModelConfig m;
+        m.vocabSize = vocabSize;
+        m.maxSeqLen = maxSeqLen;
+        m.dModel = dModel;
+        m.numHeads = numHeads;
+        m.numLayers = numLayers;
+        m.dFF = dFF;
+        m.dropout = dropout;
+        m.tieWeights = 1;
+        return m;
+    }
+};
+
+class NH2Coder {
+public:
+    NH2CoderConfig config;
+    TransformerModel model;
+    std::shared_ptr<Tokenizer> tokenizer;
+    bool initialized = false;
+    
+    NH2Coder() = default;
+    explicit NH2Coder(const NH2CoderConfig& cfg) : config(cfg) {}
+    
+    // Initialize model and tokenizer
+    void create();
+    
+    // Train on text data (blocking, runs training loop)
+    void train(const std::string& text, int maxSteps = 0);
+    
+    // Train from file
+    void trainFromFile(const std::string& path, int maxSteps = 0);
+    
+    // Generate code from prompt
+    std::string generate(const std::string& prompt, int maxTokens = 200, 
+                        float temperature = 0.8f, int topK = 50, float topP = 0.9f);
+    
+    // Save/load
+    void save(const std::string& dir);
+    void load(const std::string& dir);
+    
+    // Stats
+    std::string summary() const;
+    size_t parameterCount() const { return model.parameterCount(); }
+    
+    // Set callback for training progress
+    void setProgressCallback(std::function<void(int step, float loss, float lr)> cb) {
+        progressCb_ = cb;
+    }
+    
+private:
+    std::function<void(int step, float loss, float lr)> progressCb_;
+};
+
+// ============================================================================
 // CONVENIENCE FUNCTIONS
 // ============================================================================
 
 // Quick training from raw text
 std::string quickTrain(const std::string& text, int vocabSize = 8000, 
-                       int dModel = 128, int numLayers = 2, int numHeads = 4,
+                       int dModel = 256, int numLayers = 4, int numHeads = 4,
                        int steps = 1000, int maxTokens = 100, const std::string& prompt = "");
 
 // Quick LoRA fine-tune
