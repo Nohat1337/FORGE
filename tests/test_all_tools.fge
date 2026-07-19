@@ -1,0 +1,44 @@
+import "llm"
+
+let baseModel = "/home/nohat1337/c++-fork/models/SmolLM-135M.Q8_0.gguf"
+
+print("Loading model...")
+llm.load_gguf(baseModel)
+
+print("Initializing FAW agent...")
+llm.faw_init("ToolTester", 3, 0.0)
+
+// Test each tool individually via faw_chat (single step)
+print("\n=== Tool: calculate ===")
+let r1 = llm.faw_chat("Calculate 25 * 4 + 10")
+print("Result: " + r1)
+
+print("\n=== Tool: get_time ===")
+let r2 = llm.faw_chat("What time is it?")
+print("Result: " + r2)
+
+print("\n=== Tool: list_files ===")
+let r3 = llm.faw_chat("List files in /home")
+print("Result: " + r3)
+
+print("\n=== Tool: memory store ===")
+let r4 = llm.faw_chat("Remember that project_name is ForgeAgent")
+print("Result: " + r4)
+
+print("\n=== Tool: memory retrieve ===")
+let r5 = llm.faw_chat("What is the project_name?")
+print("Result: " + r5)
+
+print("\n=== Tool: execute_command ===")
+let r6 = llm.faw_chat("Run echo 'hello from agent'")
+print("Result: " + r6)
+
+print("\n=== Tool: write_file ===")
+let r7 = llm.faw_chat("Write 'test content' to /tmp/agent_test.txt")
+print("Result: " + r7)
+
+print("\n=== Tool: read_file ===")
+let r8 = llm.faw_chat("Read /tmp/agent_test.txt")
+print("Result: " + r8)
+
+print("\n=== All tool tests complete ===")

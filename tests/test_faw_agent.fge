@@ -1,0 +1,36 @@
+import "llm"
+
+// Test FAW agent with tool-calling - no LoRA needed
+
+let baseModel = "/home/nohat1337/c++-fork/models/SmolLM-135M.Q8_0.gguf"
+
+print("Loading model...")
+llm.load_gguf(baseModel)
+
+print("Initializing FAW agent...")
+llm.faw_init("ToolBot", 5, 0.3)
+
+print("Available tools:")
+print(llm.faw_tools())
+
+print("\n=== Test 1: Calculate ===")
+let r1 = llm.faw_chat("What is 15 * 23?")
+print("Agent: " + r1)
+
+print("\n=== Test 2: Time ===")
+let r2 = llm.faw_chat("What time is it?")
+print("Agent: " + r2)
+
+print("\n=== Test 3: List files ===")
+let r3 = llm.faw_chat("List files in /home")
+print("Agent: " + r3)
+
+print("\n=== Test 4: Memory store ===")
+let r4 = llm.faw_chat("Remember my name is Alex")
+print("Agent: " + r4)
+
+print("\n=== Test 5: Memory retrieve ===")
+let r5 = llm.faw_chat("What's my name?")
+print("Agent: " + r5)
+
+print("\nAll FAW agent tests done!")

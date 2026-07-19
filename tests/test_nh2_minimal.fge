@@ -1,0 +1,11 @@
+import "llm"
+
+print("Creating NH-2-Coder tiny...")
+llm.nh2coder_create("tiny")
+print("Created!")
+
+print("Generating 10 tokens (no training)...")
+let r = llm.nh2coder_generate("Hello world", 10, 0.5, 10, 0.9)
+print("Result: [" + r + "]")
+
+print("Done!")

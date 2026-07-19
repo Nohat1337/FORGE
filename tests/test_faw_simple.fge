@@ -1,0 +1,28 @@
+import "llm"
+
+// Test direct tool calling (bypass model generation for tool calls)
+
+let baseModel = "/home/nohat1337/c++-fork/models/SmolLM-135M.Q8_0.gguf"
+
+print("Loading model...")
+llm.load_gguf(baseModel)
+
+print("Initializing FAW agent...")
+llm.faw_init("ToolBot", 3, 0.0)  // temp=0 for deterministic
+
+// Test: directly test tool parser
+print("\n=== Direct Tool Calls ===")
+
+// The FAW agent has tools registered, let's test if we can invoke them
+// Actually the tools are called by the model's output, so we need the model to output tool calls
+
+// Simple test - use model to generate, see what happens
+let r = llm.generate("User: What is 2+2?\nAssistant: Let me calculate.", 20, 0.0, 1, 1.0)
+print("Model output: " + r)
+
+print("\n=== FAW Single Step Test ===")
+// faw_chat does one step: user message -> model -> if tool call, execute -> model -> response
+let r2 = llm.faw_chat("Calculate 5 * 10")
+print("Result: " + r2)
+
+print("\nDone!")

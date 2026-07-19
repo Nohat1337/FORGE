@@ -1,0 +1,25 @@
+import "llm"
+
+print("=== NH-2-Coder Tiny Test ===")
+
+// Create NH-2-Coder (uses global instance)
+let info = llm.nh2coder_create("tiny")
+print("Created: " + info)
+
+// Train on some code
+print("Training...")
+let log1 = llm.nh2coder_train("fn main() { print(\"hello\") }", 20)
+print(log1)
+
+let log2 = llm.nh2coder_train("fn add(a, b) { return a + b }", 20)
+print(log2)
+
+let log3 = llm.nh2coder_train("class Point { x y }", 20)
+print(log3)
+
+// Generate code
+print("Generating...")
+let code = llm.nh2coder_generate("fn fib(n) {", 50, 0.7, 50, 0.9)
+print("Generated: " + code)
+
+print("NH-2-Coder test complete!")

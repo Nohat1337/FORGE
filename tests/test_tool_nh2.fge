@@ -1,0 +1,15 @@
+import "llm"
+
+print("Creating model...")
+llm.nh2coder_create("tiny")
+print("Model created!")
+
+print("Training...")
+let log = llm.nh2coder_train("User: 2+2?\nAssistant: 4\nUser: time?\nAssistant: now\nUser: files?\nAssistant: none", 30)
+print(log)
+
+print("Generating...")
+let r = llm.nh2coder_generate("User:", 20, 0.1, 10, 0.9)
+print("Result: " + r)
+
+print("All done!")

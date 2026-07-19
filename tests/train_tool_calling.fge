@@ -1,0 +1,40 @@
+import "llm"
+
+// System prompt that teaches the tool format
+let TOOL_SYSTEM_PROMPT = "You are a helpful AI assistant with access to tools.\n\nWhen you need to use a tool, output EXACTLY in this format:\n.EN{\"name\":\"tool_name\",\"args\":{\"key\":\"value\"}}.`,.\n\nAvailable tools:\n- web_search: Search the web (query)\n- read_file: Read a file (path)\n- write_file: Write to a file (path, content)\n- execute_command: Run shell command (command)\n- get_time: Current date/time\n- calculate: Math expression (expression)\n- list_files: Directory listing (path)\n- memory: Store/retrieve info (action, key, value)\n\nAfter tool results, continue helping the user."
+
+// Training examples (minimal)
+let ex1 = "User: What's 2+2?\nAssistant: \n.EN{\"name\":\"calculate\",\"args\":{\"expression\":\"2+2\"}}.`,."
+let ex2 = "User: What time is it?\nAssistant: \n.EN{\"name\":\"get_time\",\"args\":{}}.`,."
+let ex3 = "User: Search for cats\nAssistant: \n.EN{\"name\":\"web_search\",\"args\":{\"query\":\"cats\"}}.`,."
+
+let fullTrainingText = TOOL_SYSTEM_PROMPT + "\n\n" + ex1 + "\n\n" + ex2 + "\n\n" + ex3
+
+print("Training text length: " + str(len(fullTrainingText)))
+
+// ============================================================
+// TRAINING PIPELINE
+// ============================================================
+
+let baseModel = "/home/nohat1337/c++-fork/models/SmolLM-135M.Q8_0.gguf"
+let customName = "ToolMaster-135M"
+
+print("Loading base model...")
+llm.create_model(customName, baseModel)
+
+print("Enabling LoRA (rank=16)...")
+llm.enable_lora(16, 16.0)
+
+print("Training on tool-calling data (5 steps)...")
+let result = llm.lora_train(fullTrainingText, 5, 0.0001)
+print(result)
+
+print("Testing tool call generation...")
+let testPrompt = TOOL_SYSTEM_PROMPT + "\n\nUser: What's 25 * 4?\nAssistant:"
+let gen = llm.generate(testPrompt, 50, 0.1, 1, 0.9)
+print("Generated: " + gen)
+
+print("Saving model...")
+llm.save_model("/home/nohat1337/c++-fork/models/" + customName)
+
+print("Done! Model saved as: " + customName)

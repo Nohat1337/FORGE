@@ -1,0 +1,15 @@
+import "llm"
+
+print("Creating NH-2-Coder...")
+let info = llm.nh2coder_create("tiny")
+print(info)
+
+print("Training...")
+let log1 = llm.nh2coder_train("User: What is 2+2?\nAssistant: The answer is 4.", 30)
+print(log1)
+
+print("Generating...")
+let code = llm.nh2coder_generate("User: What is", 30, 0.1, 10, 0.9)
+print("Generated: " + code)
+
+print("Done!")
