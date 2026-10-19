@@ -573,7 +573,10 @@ void Compiler::compileTryCatch(TryStmt& stmt) {
     beginScope();
     addLocal(stmt.catchVar, false);
     emitOpOperand16(OP_SET_LOCAL, (uint16_t)(current_->locals.size() - 1));
-    emitOp(OP_POP);
+    // NOTE: no POP here. OP_SET_LOCAL does not consume its operand, and locals
+    // are stack slots: on the exception path the thrown value pushed by the VM
+    // IS the catchVar slot. Popping it would pop the local itself and drift the
+    // stack top by one on every caught exception (underflow -> segfault).
     compileStatements(stmt.catchBody);
     endScope();
     patchJump(endJump);

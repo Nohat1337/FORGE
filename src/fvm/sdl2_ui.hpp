@@ -128,6 +128,10 @@ private:
     int width_ = 800, height_ = 600;
     bool open_ = false;
 
+    // Last known cursor position — kept across frames so consumers always
+    // see valid hover coordinates even on frames without mouse events.
+    int lastMouseX_ = 0, lastMouseY_ = 0;
+
     static constexpr int CHAR_W = 8;
     static constexpr int CHAR_H = 8;
 

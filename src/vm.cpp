@@ -2,6 +2,7 @@
 #include <iostream>
 #include <sstream>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <random>
 #include <cctype>
@@ -18,6 +19,53 @@
 #include <sys/select.h>
 #endif
 
+namespace {
+
+constexpr long long FORGE_LLONG_MIN = std::numeric_limits<long long>::min();
+
+inline bool checkedAdd(long long a, long long b, long long* out) {
+#if defined(__GNUC__)
+    return __builtin_add_overflow(a, b, out);
+#else
+    *out = (long long)((unsigned long long)a + (unsigned long long)b);
+    return ((a > 0 && b > 0 && *out < 0) || (a < 0 && b < 0 && *out >= 0));
+#endif
+}
+
+inline bool checkedSub(long long a, long long b, long long* out) {
+#if defined(__GNUC__)
+    return __builtin_sub_overflow(a, b, out);
+#else
+    *out = (long long)((unsigned long long)a - (unsigned long long)b);
+    return ((b < 0 && a > 0 && *out < 0) || (b > 0 && a < 0 && *out >= 0));
+#endif
+}
+
+inline bool checkedMul(long long a, long long b, long long* out) {
+#if defined(__GNUC__)
+    return __builtin_mul_overflow(a, b, out);
+#else
+    if (a == 0 || b == 0) { *out = 0; return false; }
+    *out = a * b;
+    return (*out / b != a);
+#endif
+}
+
+// Safe index extraction: accepts ints (and integral floats); rejects garbage.
+inline bool indexOperand(const Value& v, long long* out) {
+    if (v.type == ValueType::VAL_INT) { *out = v.as.integer; return true; }
+    if (v.type == ValueType::VAL_FLOAT) {
+        double d = v.as.floating;
+        if (d >= -9.2e18 && d <= 9.2e18 && d == (double)(long long)d) {
+            *out = (long long)d;
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
 VM::VM() {
     stack.reserve(STACK_MAX);
     defineBuiltins();
@@ -32,7 +80,11 @@ void VM::reset() {
     openUpvalues = nullptr;
 }
 
-void VM::push(const Value& val) { stack.push_back(val); }
+void VM::push(const Value& val) {
+    if (stack.size() >= (size_t)STACK_MAX)
+        throw std::runtime_error("Stack overflow: value stack exhausted");
+    stack.push_back(val);
+}
 Value VM::pop() { Value v = stack.back(); stack.pop_back(); return v; }
 Value VM::peek(int distance) { return stack[stack.size() - 1 - distance]; }
 
@@ -86,7 +138,8 @@ bool VM::handleError(const std::string& msg) {
         while (frameCount > tf.frameCount) { frameCount--; frames.pop_back(); }
         stack.resize(tf.stackSize);
         CallFrame& cf = frames[frameCount - 1];
-        cf.ip = cf.closure->function->chunk->code.data() + tf.handlerOffset;
+        if (cf.closure && cf.closure->function && cf.closure->function->chunk)
+            cf.ip = cf.closure->function->chunk->code.data() + tf.handlerOffset;
         push(errVal);
         return true;
     }
@@ -849,8 +902,13 @@ bool VM::interpret(std::shared_ptr<ObjFunction> function) {
                 case OP_ADD: {
                     Value b = pop(); Value a = pop();
                     if (a.isNumber() && b.isNumber()) {
-                        if (a.type == ValueType::VAL_INT && b.type == ValueType::VAL_INT)
-                            push(Value::integer(a.as.integer + b.as.integer));
+                        if (a.type == ValueType::VAL_INT && b.type == ValueType::VAL_INT) {
+                            long long r;
+                            if (!checkedAdd(a.as.integer, b.as.integer, &r))
+                                push(Value::integer(r));
+                            else // signed overflow (UB in C++): promote to double
+                                push(Value::floating((double)a.as.integer + (double)b.as.integer));
+                        }
                         else push(Value::floating(a.asNumber() + b.asNumber()));
                     } else if (a.isString() && b.isString()) {
                         push(Value::obj(std::make_shared<ObjString>(a.asString()->value + b.asString()->value)));
@@ -860,8 +918,12 @@ bool VM::interpret(std::shared_ptr<ObjFunction> function) {
                 case OP_SUBTRACT: {
                     Value b = pop(); Value a = pop();
                     if (a.isNumber() && b.isNumber()) {
-                        if (a.type == ValueType::VAL_INT && b.type == ValueType::VAL_INT)
-                            push(Value::integer(a.as.integer - b.as.integer));
+                        if (a.type == ValueType::VAL_INT && b.type == ValueType::VAL_INT) {
+                            long long r;
+                            if (!checkedSub(a.as.integer, b.as.integer, &r))
+                                push(Value::integer(r));
+                            else push(Value::floating((double)a.as.integer - (double)b.as.integer));
+                        }
                         else push(Value::floating(a.asNumber() - b.asNumber()));
                     } else { if (!handleError("Invalid operands for '-'")) return false; break; }
                     break;
@@ -869,8 +931,12 @@ bool VM::interpret(std::shared_ptr<ObjFunction> function) {
                 case OP_MULTIPLY: {
                     Value b = pop(); Value a = pop();
                     if (a.isNumber() && b.isNumber()) {
-                        if (a.type == ValueType::VAL_INT && b.type == ValueType::VAL_INT)
-                            push(Value::integer(a.as.integer * b.as.integer));
+                        if (a.type == ValueType::VAL_INT && b.type == ValueType::VAL_INT) {
+                            long long r;
+                            if (!checkedMul(a.as.integer, b.as.integer, &r))
+                                push(Value::integer(r));
+                            else push(Value::floating((double)a.as.integer * (double)b.as.integer));
+                        }
                         else push(Value::floating(a.asNumber() * b.asNumber()));
                     } else { if (!handleError("Invalid operands for '*'")) return false; break; }
                     break;
@@ -879,8 +945,13 @@ bool VM::interpret(std::shared_ptr<ObjFunction> function) {
                     Value b = pop(); Value a = pop();
                     if (a.isNumber() && b.isNumber()) {
                         if (b.asNumber() == 0) { if (!handleError("Division by zero")) return false; break; }
-                        if (a.type == ValueType::VAL_INT && b.type == ValueType::VAL_INT)
-                            push(Value::integer(a.as.integer / b.as.integer));
+                        if (a.type == ValueType::VAL_INT && b.type == ValueType::VAL_INT) {
+                            // LLONG_MIN / -1 overflows (SIGFPE); return exact double instead
+                            if (b.as.integer == -1 && a.as.integer == FORGE_LLONG_MIN)
+                                push(Value::floating(-(double)a.as.integer));
+                            else
+                                push(Value::integer(a.as.integer / b.as.integer));
+                        }
                         else push(Value::floating(a.asNumber() / b.asNumber()));
                     } else { if (!handleError("Invalid operands for '/'")) return false; break; }
                     break;
@@ -890,7 +961,8 @@ bool VM::interpret(std::shared_ptr<ObjFunction> function) {
                     if (a.isNumber() && b.isNumber()) {
                         if (b.asNumber() == 0) { if (!handleError("Division by zero")) return false; break; }
                         if (a.type == ValueType::VAL_INT && b.type == ValueType::VAL_INT)
-                            push(Value::integer(a.as.integer % b.as.integer));
+                            // LLONG_MIN % -1 is UB in C++; mathematically it is 0
+                            push(Value::integer(b.as.integer == -1 ? 0 : a.as.integer % b.as.integer));
                         else push(Value::floating(std::fmod(a.asNumber(), b.asNumber())));
                     } else { if (!handleError("Invalid operands for '%'")) return false; break; }
                     break;
@@ -1035,22 +1107,28 @@ bool VM::interpret(std::shared_ptr<ObjFunction> function) {
                 }
                 case OP_INDEX: {
                     Value idx = pop(); Value obj = pop();
-                    if (obj.isArray()) {
-                        long long i = idx.asInteger();
-                        long long len = (long long)obj.asArray()->elements.size();
-                        if (i < 0 || i >= len) {
-                            if (!handleError("Array index " + std::to_string(i) + " out of bounds (length " + std::to_string(len) + ")")) return false;
+                    long long i = 0;
+                    if (obj.isArray() || obj.isString()) {
+                        if (!indexOperand(idx, &i)) {
+                            if (!handleError("Index must be an integer (got " +
+                                (idx.isString() ? "string" : idx.type == ValueType::VAL_NIL ? "nil" : "value") + ")")) return false;
                             break;
                         }
-                        push(obj.asArray()->elements[i]);
-                    } else if (obj.isString()) {
-                        long long i = idx.asInteger();
-                        long long len = (long long)obj.asString()->value.size();
-                        if (i < 0 || i >= len) {
-                            if (!handleError("String index " + std::to_string(i) + " out of bounds (length " + std::to_string(len) + ")")) return false;
-                            break;
+                        if (obj.isArray()) {
+                            long long len = (long long)obj.asArray()->elements.size();
+                            if (i < 0 || i >= len) {
+                                if (!handleError("Array index " + std::to_string(i) + " out of bounds (length " + std::to_string(len) + ")")) return false;
+                                break;
+                            }
+                            push(obj.asArray()->elements[i]);
+                        } else {
+                            long long len = (long long)obj.asString()->value.size();
+                            if (i < 0 || i >= len) {
+                                if (!handleError("String index " + std::to_string(i) + " out of bounds (length " + std::to_string(len) + ")")) return false;
+                                break;
+                            }
+                            push(Value::obj(std::make_shared<ObjString>(std::string(1, obj.asString()->value[i]))));
                         }
-                        push(Value::obj(std::make_shared<ObjString>(std::string(1, obj.asString()->value[i]))));
                     } else if (obj.isMap()) {
                         if (!idx.isString()) {
                             if (!handleError("Map key must be a string")) return false;
@@ -1067,8 +1145,12 @@ bool VM::interpret(std::shared_ptr<ObjFunction> function) {
                 }
                 case OP_SET_INDEX: {
                     Value val = pop(); Value idx = pop(); Value obj = pop();
+                    long long i = 0;
                     if (obj.isArray()) {
-                        long long i = idx.asInteger();
+                        if (!indexOperand(idx, &i)) {
+                            if (!handleError("Array index must be an integer")) return false;
+                            break;
+                        }
                         long long len = (long long)obj.asArray()->elements.size();
                         if (i < 0 || i >= len) {
                             if (!handleError("Array index " + std::to_string(i) + " out of bounds (length " + std::to_string(len) + ")")) return false;

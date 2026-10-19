@@ -253,7 +253,7 @@ std::vector<Token> Lexer::tokenize() {
                 case '*': advance(); tokens.push_back({TokenType::STAR,"*",line_,startCol}); break;
                 case '/': advance(); tokens.push_back({TokenType::SLASH,"/",line_,startCol}); break;
                 case '%': advance(); tokens.push_back({TokenType::PERCENT,"%",line_,startCol}); break;
-                case '=': advance(); if (peek()=='=') { advance(); tokens.push_back({TokenType::EQUAL_EQUAL,"==",line_,startCol}); } else tokens.push_back({TokenType::ASSIGN,"=",line_,startCol}); break;
+                case '=': advance(); if (peek()=='=') { advance(); tokens.push_back({TokenType::EQUAL_EQUAL,"==",line_,startCol}); } else if (peek()=='>') { advance(); tokens.push_back({TokenType::ARROW,"=>",line_,startCol}); } else tokens.push_back({TokenType::ASSIGN,"=",line_,startCol}); break;
                 case '!': advance(); if (peek()=='=') { advance(); tokens.push_back({TokenType::BANG_EQUAL,"!=",line_,startCol}); } else { tokens.push_back({TokenType::NOT,"!",line_,startCol}); } break;
                 case '<': advance(); if (peek()=='=') { advance(); tokens.push_back({TokenType::LESS_EQUAL,"<=",line_,startCol}); } else tokens.push_back({TokenType::LESS,"<",line_,startCol}); break;
                 case '>': advance(); if (peek()=='=') { advance(); tokens.push_back({TokenType::GREATER_EQUAL,">=",line_,startCol}); } else tokens.push_back({TokenType::GREATER,">",line_,startCol}); break;

@@ -55,6 +55,10 @@ public:
     void registerTool(const Tool& tool);
     void registerBuiltinTools();
 
+    // Invoke a single tool directly (used by llm.faw_tool and tests)
+    std::string invokeTool(const std::string& name,
+                           const std::unordered_map<std::string, std::string>& args);
+
     // Run the agent loop
     std::string run(const std::string& userMessage);
 

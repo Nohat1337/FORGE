@@ -17,6 +17,11 @@
 
 namespace forge::fvm {
 
+// Process-wide trusted-mode flag. Set by ForgeVM::setTrustedMode so that
+// subsystems without a VM reference (FAW agent tools, etc.) can check it
+// lazily at call time.
+extern bool g_globalTrustedMode;
+
 // Forward declarations
 struct FValue;
 class ForgeVM;
@@ -125,6 +130,11 @@ struct GCString : GCObject {
 struct GCFunction : GCObject {
     Chunk* chunk = nullptr;
     std::unique_ptr<Chunk> ownedChunk;
+    // Pre-converted FValue view of chunk->constants. Populated once at
+    // function creation so OP_CONSTANT / OP_CLOSURE never re-convert
+    // (previously every OP_CONSTANT with a string allocated a fresh
+    // GCString, and every OP_CLOSURE deep-copied the whole Chunk).
+    std::vector<FValue> fconstants;
     int arity = 0;
     int upvalueCount = 0;
     int localCount = 0;
@@ -294,6 +304,12 @@ public:
 
     void setArgs(int argc, char** argv) { savedArgc_ = argc; savedArgv_ = argv; }
 
+    // Trusted mode unlocks dangerous capabilities (FFI native calls, raw
+    // memory access, unrestricted os.execute). Must be enabled explicitly
+    // by the embedder/CLI — NEVER default-on for untrusted scripts.
+    void setTrustedMode(bool t) { trustedMode_ = t; g_globalTrustedMode = t; }
+    bool isTrusted() const { return trustedMode_; }
+
     void defineNative(const std::string& name, GCNative::NativeFn fn, int arity = -1);
     void defineModule(const std::string& name, GCMap* module);
 
@@ -315,6 +331,7 @@ private:
     std::vector<TryFrame> tryFrames_;
     FVMGC gc_;
     size_t maxHeap_ = 10000000;
+    bool trustedMode_ = false;
 
     void reset();
     void runtimeError(const std::string& msg);

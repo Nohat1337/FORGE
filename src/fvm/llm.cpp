@@ -13,6 +13,15 @@ namespace forge::llm {
 
 using ::forge::fvm::g_llama;
 
+// Guarded string-arg accessor: throwing beats a null-deref crash from a
+// hostile/mistyped script (asString() returns nullptr for non-strings).
+static std::string argStr(const std::vector<::forge::fvm::FValue>& args, size_t i, const char* fn) {
+    if (i >= args.size() || !args[i].isString())
+        throw std::runtime_error(std::string(fn) + "(): argument " + std::to_string(i + 1)
+                                 + " must be a string");
+    return args[i].asString()->value;
+}
+
 // ============================================================================
 // DATASET IMPLEMENTATION
 // ============================================================================
@@ -1935,13 +1944,13 @@ std::string quickLoRA(const std::string& baseModelPath, const std::string& train
     if (args.size() < 1 || args.size() > 7) {
         throw std::runtime_error("llm.quick_train() expects 1-7 arguments: text, vocabSize, dModel, numLayers, numHeads, steps, prompt");
     }
-    std::string text = args[0].asString()->value;
+    std::string text = argStr(args, 0, "llm");
     int vocabSize = args.size() > 1 ? (int)args[1].asInteger() : 5000;
     int dModel = args.size() > 2 ? (int)args[2].asInteger() : 128;
     int numLayers = args.size() > 3 ? (int)args[3].asInteger() : 2;
     int numHeads = args.size() > 4 ? (int)args[4].asInteger() : 4;
     int steps = args.size() > 5 ? (int)args[5].asInteger() : 100;
-    std::string prompt = args.size() > 6 ? args[6].asString()->value : "";
+    std::string prompt = args.size() > 6 ? argStr(args, 6, "llm") : "";
     
     std::string result = quickTrain(text, vocabSize, dModel, numLayers, numHeads, steps, 100, prompt);
     return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString(result));
@@ -1952,11 +1961,11 @@ std::string quickLoRA(const std::string& baseModelPath, const std::string& train
     if (args.size() < 2 || args.size() > 5) {
         throw std::runtime_error("llm.quick_lora() expects 2-5 arguments: baseModelPath, trainText, loraRank, steps, prompt");
     }
-    std::string baseModelPath = args[0].asString()->value;
-    std::string trainText = args[1].asString()->value;
+    std::string baseModelPath = argStr(args, 0, "llm");
+    std::string trainText = argStr(args, 1, "llm");
     int loraRank = args.size() > 2 ? (int)args[2].asInteger() : 16;
     int steps = args.size() > 3 ? (int)args[3].asInteger() : 100;
-    std::string prompt = args.size() > 4 ? args[4].asString()->value : "";
+    std::string prompt = args.size() > 4 ? argStr(args, 4, "llm") : "";
     
     std::string result = quickLoRA(baseModelPath, trainText, loraRank, steps, prompt);
     return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString(result));
@@ -1974,8 +1983,8 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
         if (args.size() < 1 || args.size() > 2) {
             throw std::runtime_error("llm.load() expects 1 or 2 arguments (model_path, tokenizer_path)");
         }
-        std::string modelPath = args[0].asString()->value;
-        std::string tokenizerPath = args.size() > 1 ? args[1].asString()->value : "";
+        std::string modelPath = argStr(args, 0, "llm");
+        std::string tokenizerPath = args.size() > 1 ? argStr(args, 1, "llm") : "";
         
         std::string name = "model_" + std::to_string(std::hash<std::string>{}(modelPath));
         if (forge::llm::LLMManager::instance().loadModel(name, modelPath, tokenizerPath)) {
@@ -1989,8 +1998,8 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
         if (args.size() < 2 || args.size() > 4) {
             throw std::runtime_error("llm.generate() expects 2-4 arguments (model_name, prompt, max_tokens, temperature)");
         }
-        std::string modelName = args[0].asString()->value;
-        std::string prompt = args[1].asString()->value;
+        std::string modelName = argStr(args, 0, "llm");
+        std::string prompt = argStr(args, 1, "llm");
         int maxTokens = args.size() > 2 ? (int)args[2].asInteger() : 100;
         float temperature = args.size() > 3 ? (float)args[3].asNumber() : 0.8f;
         
@@ -2011,7 +2020,7 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
     // llm.unload(model_name) -> nil
     llmMod->entries["unload"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
         if (args.size() != 1) throw std::runtime_error("llm.unload() expects 1 argument");
-        std::string name = args[0].asString()->value;
+        std::string name = argStr(args, 0, "llm");
         forge::llm::LLMManager::instance().unloadModel(name);
         return ::forge::fvm::FValue::nil();
     }, "llm.unload"));
@@ -2021,7 +2030,7 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
         if (args.size() < 1 || args.size() > 2) {
             throw std::runtime_error("llm.train_tokenizer() expects 1 or 2 arguments (text, vocab_size)");
         }
-        std::string text = args[0].asString()->value;
+        std::string text = argStr(args, 0, "llm");
         int vocabSize = args.size() > 1 ? (int)args[1].asInteger() : 5000;
         
         auto tokenizer = std::make_shared<forge::llm::Tokenizer>();
@@ -2051,8 +2060,8 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
         if (args.size() < 1 || args.size() > 2) {
             throw std::runtime_error("llm.quick_generate() expects 1 or 2 arguments (prompt, model_type)");
         }
-        std::string prompt = args[0].asString()->value;
-        std::string modelType = args.size() > 1 ? args[1].asString()->value : "tiny";
+        std::string prompt = argStr(args, 0, "llm");
+        std::string modelType = args.size() > 1 ? argStr(args, 1, "llm") : "tiny";
         
         std::string result = prompt + " ... [generated by " + modelType + " model]";
         return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString(result));
@@ -2063,7 +2072,7 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
         if (args.size() < 1 || args.size() > 2) {
             throw std::runtime_error("llm.embed() expects 1 or 2 arguments (text, model_name)");
         }
-        std::string text = args[0].asString()->value;
+        std::string text = argStr(args, 0, "llm");
         auto* arr = new ::forge::fvm::GCArray();
         for (int i = 0; i < 64; i++) {
             arr->elements.push_back(::forge::fvm::FValue::floating((float)std::hash<std::string>{}(text + std::to_string(i)) / 1e9));
@@ -2076,7 +2085,7 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
         if (args.size() < 2 || args.size() > 3) {
             throw std::runtime_error("llm.similarity() expects 2 or 3 arguments");
         }
-        float sim = 0.5f + 0.5f * std::sin(std::hash<std::string>{}(args[0].asString()->value + args[1].asString()->value));
+        float sim = 0.5f + 0.5f * std::sin(std::hash<std::string>{}(argStr(args, 0, "llm") + argStr(args, 1, "llm")));
         return ::forge::fvm::FValue::floating(sim);
     }, "llm.similarity"));
     
@@ -2103,7 +2112,7 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
     llmMod->entries["nh2coder_create"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
         forge::llm::NH2CoderConfig cfg;
         if (args.size() >= 1 && args[0].asString()) {
-            std::string preset = args[0].asString()->value;
+            std::string preset = argStr(args, 0, "llm");
             if (preset == "tiny") cfg = forge::llm::NH2CoderConfig::tiny();
         }
         g_coder = forge::llm::NH2Coder(cfg);
@@ -2114,7 +2123,7 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
     // nh2coder.train(text, max_steps?) -> training log
     llmMod->entries["nh2coder_train"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
         if (args.size() < 1) throw std::runtime_error("nh2coder.train() expects 1+ arguments (text, max_steps?)");
-        std::string text = args[0].asString()->value;
+        std::string text = argStr(args, 0, "llm");
         int maxSteps = args.size() > 1 ? (int)args[1].asInteger() : 100;
         
         if (!g_coder.initialized) g_coder.create();
@@ -2132,7 +2141,7 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
     // nh2coder.generate(prompt, max_tokens?, temperature?, top_k?, top_p?) -> string
     llmMod->entries["nh2coder_generate"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
         if (args.size() < 1) throw std::runtime_error("nh2coder.generate() expects 1+ arguments (prompt, ...)");
-        std::string prompt = args[0].asString()->value;
+        std::string prompt = argStr(args, 0, "llm");
         int maxTokens = args.size() > 1 ? (int)args[1].asInteger() : 200;
         float temp = args.size() > 2 ? (float)args[2].asNumber() : 0.8f;
         int topK = args.size() > 3 ? (int)args[3].asInteger() : 50;
@@ -2148,14 +2157,14 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
     llmMod->entries["nh2coder_save"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
         if (args.size() < 1) throw std::runtime_error("nh2coder.save() expects 1 argument (dir)");
         if (!g_coder.initialized) throw std::runtime_error("Model not initialized");
-        g_coder.save(args[0].asString()->value);
+        g_coder.save(argStr(args, 0, "llm"));
         return ::forge::fvm::FValue::nil();
     }, "llm.nh2coder_save"));
     
     // nh2coder.load(dir) -> nil
     llmMod->entries["nh2coder_load"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
         if (args.size() < 1) throw std::runtime_error("nh2coder.load() expects 1 argument (dir)");
-        g_coder.load(args[0].asString()->value);
+        g_coder.load(argStr(args, 0, "llm"));
         return ::forge::fvm::FValue::nil();
     }, "llm.nh2coder_load"));
 
@@ -2166,7 +2175,7 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
     // llm.load_gguf(path) -> string (model info)
     llmMod->entries["load_gguf"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
         if (args.size() < 1) throw std::runtime_error("llm.load_gguf() expects 1 argument (path to .gguf file)");
-        std::string path = args[0].asString()->value;
+        std::string path = argStr(args, 0, "llm");
         if (!g_llama.loadFromGGUF(path)) {
             return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: Failed to load GGUF model from " + path + "]"));
         }
@@ -2185,7 +2194,7 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
         if (args.size() < 1) throw std::runtime_error("llm.generate() expects 1+ arguments (prompt)");
         if (!g_llama.loaded) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: No model loaded. Call llm.load_gguf(path) first]"));
         
-        std::string prompt = args[0].asString()->value;
+        std::string prompt = argStr(args, 0, "llm");
         int maxTokens = args.size() > 1 ? (int)args[1].asInteger() : 256;
         float temp = args.size() > 2 ? (float)args[2].asNumber() : 0.8f;
         int topK = args.size() > 3 ? (int)args[3].asInteger() : 40;
@@ -2227,7 +2236,7 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
         if (!g_llama.loaded) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: No model loaded]"));
         if (!g_llama.loraEnabled) g_llama.enableLoRA();
         if (args.size() < 1) throw std::runtime_error("llm.lora_train() expects 1+ arguments (text)");
-        std::string text = args[0].asString()->value;
+        std::string text = argStr(args, 0, "llm");
         int steps = args.size() > 1 ? (int)args[1].asInteger() : 100;
         float lr = args.size() > 2 ? (float)args[2].asNumber() : 1e-4f;
 
@@ -2248,7 +2257,7 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
     // llm.save_lora(path) -> nil
     llmMod->entries["save_lora"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
         if (!g_llama.loraEnabled) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: LoRA not enabled]"));
-        std::string path = args.size() > 0 ? args[0].asString()->value : "./lora_adapter";
+        std::string path = args.size() > 0 ? argStr(args, 0, "llm") : "./lora_adapter";
         g_llama.saveLoRA(path);
         return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("LoRA saved to " + path));
     }, "llm.save_lora"));
@@ -2256,7 +2265,7 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
     // llm.load_lora(path) -> string
     llmMod->entries["load_lora"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
         if (!g_llama.loaded) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: No model loaded]"));
-        std::string path = args.size() > 0 ? args[0].asString()->value : "./lora_adapter";
+        std::string path = args.size() > 0 ? argStr(args, 0, "llm") : "./lora_adapter";
         g_llama.loadLoRA(path);
         return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("LoRA loaded from " + path));
     }, "llm.load_lora"));
@@ -2282,7 +2291,7 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
     llmMod->entries["embed_real"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
         if (!g_llama.loaded) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: No model loaded]"));
         if (args.size() < 1) throw std::runtime_error("llm.embed_real() expects 1 argument (text)");
-        std::string text = args[0].asString()->value;
+        std::string text = argStr(args, 0, "llm");
         auto emb = g_llama.embed(text);
         auto* arr = new ::forge::fvm::GCArray();
         for (float v : emb) arr->elements.push_back(::forge::fvm::FValue::floating(v));
@@ -2293,7 +2302,7 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
     llmMod->entries["similarity_real"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
         if (!g_llama.loaded) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: No model loaded]"));
         if (args.size() < 2) throw std::runtime_error("llm.similarity_real() expects 2 arguments");
-        float sim = g_llama.similarity(args[0].asString()->value, args[1].asString()->value);
+        float sim = g_llama.similarity(argStr(args, 0, "llm"), argStr(args, 1, "llm"));
         return ::forge::fvm::FValue::floating(sim);
     }, "llm.similarity_real"));
 
@@ -2308,16 +2317,28 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
         cfg.maxIterations = args.size() > 1 ? (int)args[1].asInteger() : 10;
         cfg.temperature = args.size() > 2 ? (float)args[2].asNumber() : 0.3f;
         ::forge::fvm::g_agent.init(&g_llama, cfg);
-        std::string name = args.size() > 0 ? args[0].asString()->value : g_llama.config.modelName;
+        std::string name = args.size() > 0 ? argStr(args, 0, "llm") : g_llama.config.modelName;
         g_llama.setCustomName(name);
         return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("FAW agent initialized with model: " + name));
     }, "llm.faw_init"));
 
     // faw.chat(message) -> string (single agent step)
+    // faw_tool(name, key1, val1, ...) -> string — invoke a tool directly
+    llmMod->entries["faw_tool"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
+        if (args.size() < 1 || (args.size() % 2) != 1)
+            throw std::runtime_error("llm.faw_tool() expects tool_name followed by key/value pairs");
+        std::string toolName = argStr(args, 0, "llm");
+        std::unordered_map<std::string, std::string> targs;
+        for (size_t i = 1; i + 1 < args.size(); i += 2)
+            targs[argStr(args, i, "llm")] = args[i + 1].toString();
+        auto res = ::forge::fvm::g_agent.invokeTool(toolName, targs);
+        return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString(res));
+    }, "llm.faw_tool"));
+
     llmMod->entries["faw_chat"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
         if (args.size() < 1) throw std::runtime_error("llm.faw_chat() expects 1 argument (message)");
         if (!g_llama.loaded) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: No model loaded]"));
-        std::string msg = args[0].asString()->value;
+        std::string msg = argStr(args, 0, "llm");
         std::string response = ::forge::fvm::g_agent.step(msg);
         return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString(response));
     }, "llm.faw_chat"));
@@ -2326,7 +2347,7 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
     llmMod->entries["faw_run"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
         if (args.size() < 1) throw std::runtime_error("llm.faw_run() expects 1 argument (message)");
         if (!g_llama.loaded) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: No model loaded]"));
-        std::string msg = args[0].asString()->value;
+        std::string msg = argStr(args, 0, "llm");
         std::string response = ::forge::fvm::g_agent.run(msg);
         return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString(response));
     }, "llm.faw_run"));
@@ -2359,8 +2380,8 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
     // llm.create_model(name, gguf_path) -> string (creates user's named model)
     llmMod->entries["create_model"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
         if (args.size() < 2) throw std::runtime_error("llm.create_model() expects 2 arguments (name, gguf_path)");
-        std::string name = args[0].asString()->value;
-        std::string path = args[1].asString()->value;
+        std::string name = argStr(args, 0, "llm");
+        std::string path = argStr(args, 1, "llm");
         if (!g_llama.loadFromGGUF(path)) {
             return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: Failed to load " + path + "]"));
         }
@@ -2377,7 +2398,7 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
     // llm.save_model(path) -> string
     llmMod->entries["save_model"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
         if (!g_llama.loaded) return ::forge::fvm::FValue::obj(new ::forge::fvm::GCString("[Error: No model loaded]"));
-        std::string path = args.size() > 0 ? args[0].asString()->value : "./my_model";
+        std::string path = args.size() > 0 ? argStr(args, 0, "llm") : "./my_model";
         if (g_llama.loraEnabled) g_llama.mergeLoRA();
         g_llama.saveLoRA(path);
         std::string name = g_llama.customName.empty() ? g_llama.config.modelName : g_llama.customName;

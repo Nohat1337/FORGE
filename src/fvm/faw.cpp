@@ -1,4 +1,5 @@
 #include "faw.hpp"
+#include "runtime.hpp"
 #include <sstream>
 #include <algorithm>
 #include <cmath>
@@ -7,9 +8,190 @@
 #include <cstring>
 #include <regex>
 #include <fstream>
+#include <filesystem>
+#include <cctype>
+
+namespace fs = std::filesystem;
 
 namespace forge {
 namespace fvm {
+
+// ============================================================
+// Safe math expression evaluator (replaces `python3 -c` shell
+// execution, which allowed arbitrary code injection through a
+// crafted model tool-call). Grammar:
+//   expr   := term (('+'|'-') term)*
+//   term   := unary (('*'|'/'|'%') unary)*
+//   unary  := ('-'|'+')? power
+//   power  := atom ('^' unary)?
+//   atom   := NUMBER | '(' expr ')' | IDENT '(' expr (',' expr)* ')'
+// Supported functions: sqrt, abs, sin, cos, tan, log, floor, ceil, round, min, max, pow
+// ============================================================
+
+class SafeCalc {
+public:
+    static std::string eval(const std::string& src) {
+        SafeCalc c(src);
+        c.skipWs();
+        double v = c.parseExpr();
+        c.skipWs();
+        if (c.pos_ < c.s_.size())
+            throw std::runtime_error("calculate: unexpected character '" +
+                                     std::string(1, c.s_[c.pos_]) + "'");
+        // pretty-print result (integers without decimals)
+        if (std::fabs(v) < 1e15 && v == std::floor(v))
+            return std::to_string((long long)v);
+        std::ostringstream o;
+        o << v;
+        return o.str();
+    }
+
+private:
+    explicit SafeCalc(const std::string& s) : s_(s) {}
+    std::string s_;
+    size_t pos_ = 0;
+    int depth_ = 0;
+
+    void skipWs() { while (pos_ < s_.size() && isspace((unsigned char)s_[pos_])) pos_++; }
+    char peek() { return pos_ < s_.size() ? s_[pos_] : '\0'; }
+
+    double parseExpr() {
+        double v = parseTerm();
+        for (;;) {
+            skipWs();
+            if (peek() == '+') { pos_++; v += parseTerm(); }
+            else if (peek() == '-') { pos_++; v -= parseTerm(); }
+            else return v;
+        }
+    }
+    double parseTerm() {
+        double v = parseUnary();
+        for (;;) {
+            skipWs();
+            if (peek() == '*') { pos_++; v *= parseUnary(); }
+            else if (peek() == '/') {
+                pos_++;
+                double d = parseUnary();
+                if (d == 0) throw std::runtime_error("calculate: division by zero");
+                v /= d;
+            }
+            else if (peek() == '%') {
+                pos_++;
+                double d = parseUnary();
+                if (d == 0) throw std::runtime_error("calculate: division by zero");
+                v = std::fmod(v, d);
+            }
+            else return v;
+        }
+    }
+    double parseUnary() {
+        skipWs();
+        if (peek() == '-') { pos_++; return -parseUnary(); }
+        if (peek() == '+') { pos_++; return parseUnary(); }
+        return parsePower();
+    }
+    double parsePower() {
+        double base = parseAtom();
+        skipWs();
+        if (peek() == '^') { pos_++; return std::pow(base, parseUnary()); } // right-assoc
+        return base;
+    }
+    double parseAtom() {
+        skipWs();
+        if (depth_ > 32) throw std::runtime_error("calculate: expression too deep");
+        if (peek() == '(') {
+            pos_++;
+            depth_++;
+            double v = parseExpr();
+            depth_--;
+            skipWs();
+            if (peek() != ')') throw std::runtime_error("calculate: missing ')'");
+            pos_++;
+            return v;
+        }
+        if (isalpha((unsigned char)peek())) {
+            std::string name;
+            while (isalpha((unsigned char)peek()) || peek() == '_') name += s_[pos_++];
+            skipWs();
+            if (peek() != '(') throw std::runtime_error("calculate: unknown identifier '" + name + "'");
+            pos_++;
+            depth_++;
+            std::vector<double> args;
+            skipWs();
+            if (peek() != ')') {
+                args.push_back(parseExpr());
+                skipWs();
+                while (peek() == ',') { pos_++; args.push_back(parseExpr()); skipWs(); }
+            }
+            depth_--;
+            if (peek() != ')') throw std::runtime_error("calculate: missing ')'");
+            pos_++;
+            return applyFn(name, args);
+        }
+        // number literal (no exec of any kind)
+        size_t start = pos_;
+        while (isdigit((unsigned char)peek()) || peek() == '.') pos_++;
+        if (peek() == 'e' || peek() == 'E') {
+            size_t save = pos_;
+            pos_++;
+            if (peek() == '+' || peek() == '-') pos_++;
+            if (isdigit((unsigned char)peek())) { while (isdigit((unsigned char)peek())) pos_++; }
+            else pos_ = save;
+        }
+        if (start == pos_) throw std::runtime_error("calculate: expected number");
+        try { return std::stod(s_.substr(start, pos_ - start)); }
+        catch (...) { throw std::runtime_error("calculate: invalid number"); }
+    }
+
+    static double applyFn(const std::string& n, const std::vector<double>& a) {
+        auto need = [&](size_t k) {
+            if (a.size() != k) throw std::runtime_error("calculate: " + n + "() expects " +
+                                 std::to_string(k) + " argument(s)");
+        };
+        if (n == "sqrt")  { need(1); if (a[0] < 0) throw std::runtime_error("calculate: sqrt of negative"); return std::sqrt(a[0]); }
+        if (n == "abs")   { need(1); return std::fabs(a[0]); }
+        if (n == "sin")   { need(1); return std::sin(a[0]); }
+        if (n == "cos")   { need(1); return std::cos(a[0]); }
+        if (n == "tan")   { need(1); return std::tan(a[0]); }
+        if (n == "log")   { need(1); if (a[0] <= 0) throw std::runtime_error("calculate: log domain"); return std::log(a[0]); }
+        if (n == "floor") { need(1); return std::floor(a[0]); }
+        if (n == "ceil")  { need(1); return std::ceil(a[0]); }
+        if (n == "round") { need(1); return std::round(a[0]); }
+        if (n == "pow")   { need(2); return std::pow(a[0], a[1]); }
+        if (n == "min")   { need(2); return std::min(a[0], a[1]); }
+        if (n == "max")   { need(2); return std::max(a[0], a[1]); }
+        throw std::runtime_error("calculate: unknown function '" + n + "'");
+    }
+};
+
+// percent-encode for safe URL interpolation
+static std::string urlEncode(const std::string& s) {
+    static const char* hex = "0123456789ABCDEF";
+    std::string out;
+    for (unsigned char c : s) {
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') out += (char)c;
+        else {
+            out += '%';
+            out += hex[c >> 4];
+            out += hex[c & 0xF];
+        }
+    }
+    return out;
+}
+
+// Resolve path and ensure it stays inside the workspace when sandboxed.
+static bool pathAllowed(const std::string& p) {
+    if (g_globalTrustedMode) return true;   // trusted mode lifts the sandbox
+    try {
+        fs::path abs = fs::absolute(p).lexically_normal();
+        fs::path cwd = fs::current_path();
+        auto rel = abs.lexically_relative(cwd);
+        if (rel.empty() || *rel.begin() == "..") return false;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
 
 // ============================================================================
 // Tool Call Parser
@@ -64,15 +246,14 @@ void ForgeAgent::registerTool(const Tool& tool) {
 }
 
 void ForgeAgent::registerBuiltinTools() {
-    // Tool: web_search
+    // Tool: web_search  (query is percent-encoded -> no shell injection)
     registerTool({"web_search", "Search the web for information",
         {"query"},
-        [](const std::unordered_map<std::string, std::string>& args) -> ToolResult {
+        [this](const std::unordered_map<std::string, std::string>& args) -> ToolResult {
             auto it = args.find("query");
             if (it == args.end()) return {false, "", "Missing query parameter"};
-            // Use curl to fetch search results
-            std::string query = it->second;
-            std::string cmd = "curl -s \"https://api.duckduckgo.com/?q=" + query + "&format=json&no_html=1\" 2>/dev/null";
+            std::string cmd = "curl -s --max-time 10 \"https://api.duckduckgo.com/?q="
+                              + urlEncode(it->second) + "&format=json&no_html=1\" 2>/dev/null";
             FILE* pipe = popen(cmd.c_str(), "r");
             if (!pipe) return {false, "", "Failed to execute search"};
             char buffer[8192];
@@ -80,7 +261,6 @@ void ForgeAgent::registerBuiltinTools() {
             while (fgets(buffer, sizeof(buffer), pipe)) result += buffer;
             pclose(pipe);
             if (result.empty()) return {false, "", "No results found"};
-            // Extract AbstractText from JSON (simple parse)
             size_t absPos = result.find("\"AbstractText\":\"");
             if (absPos != std::string::npos) {
                 size_t start = absPos + 16;
@@ -90,7 +270,6 @@ void ForgeAgent::registerBuiltinTools() {
                     if (!abstract.empty()) return {true, abstract, ""};
                 }
             }
-            // Try RelatedTopics
             size_t relPos = result.find("\"Text\":\"");
             if (relPos != std::string::npos) {
                 size_t start = relPos + 8;
@@ -98,15 +277,17 @@ void ForgeAgent::registerBuiltinTools() {
                 if (end != std::string::npos)
                     return {true, result.substr(start, end - start), ""};
             }
-            return {true, "Search completed but no summary available. Raw: " + result.substr(0, 500), ""};
+            return {true, "Search completed but no summary available.", ""};
         }});
 
-    // Tool: read_file
-    registerTool({"read_file", "Read the contents of a file",
+    // Tool: read_file (sandboxed to the workspace unless trusted)
+    registerTool({"read_file", "Read the contents of a file inside the workspace",
         {"path"},
-        [](const std::unordered_map<std::string, std::string>& args) -> ToolResult {
+        [this](const std::unordered_map<std::string, std::string>& args) -> ToolResult {
             auto it = args.find("path");
             if (it == args.end()) return {false, "", "Missing path parameter"};
+            if (!pathAllowed(it->second))
+                return {false, "", "Sandbox: path outside workspace denied (" + it->second + ")"};
             std::ifstream f(it->second);
             if (!f.is_open()) return {false, "", "Cannot open file: " + it->second};
             std::string content((std::istreambuf_iterator<char>(f)),
@@ -115,23 +296,35 @@ void ForgeAgent::registerBuiltinTools() {
             return {true, content, ""};
         }});
 
-    // Tool: write_file
-    registerTool({"write_file", "Write content to a file",
+    // Tool: write_file (sandboxed; refuses to overwrite critical dotfiles)
+    registerTool({"write_file", "Write content to a file inside the workspace",
         {"path", "content"},
-        [](const std::unordered_map<std::string, std::string>& args) -> ToolResult {
+        [this](const std::unordered_map<std::string, std::string>& args) -> ToolResult {
             auto p = args.find("path");
             auto c = args.find("content");
             if (p == args.end() || c == args.end()) return {false, "", "Missing path or content"};
-            std::ofstream f(p->second);
+            if (!pathAllowed(p->second))
+                return {false, "", "Sandbox: path outside workspace denied (" + p->second + ")"};
+            fs::path target = fs::absolute(p->second).lexically_normal();
+            // never allow writing hidden/system files (shell startup files,
+            // .ssh keys, .gitconfig, ...) even inside the sandbox
+            if (!target.filename().string().compare(0, 1, "."))
+                return {false, "", "Sandbox: refusing to write hidden/system file"};
+            std::ofstream f(target, std::ios::binary | std::ios::trunc);
             if (!f.is_open()) return {false, "", "Cannot write to file: " + p->second};
             f << c->second;
             return {true, "File written: " + p->second, ""};
         }});
 
-    // Tool: execute_command
-    registerTool({"execute_command", "Execute a shell command",
+    // Tool: execute_command — DISABLED unless trusted mode.
+    registerTool({"execute_command", "Execute a shell command (trusted mode only)",
         {"command"},
         [](const std::unordered_map<std::string, std::string>& args) -> ToolResult {
+            if (!g_globalTrustedMode)
+                return {false, "",
+                        "execute_command is disabled in sandboxed mode — a language model "
+                        "must never run arbitrary shell commands without explicit opt-in. "
+                        "Run forgevm with --trusted to enable (only with models you trust)."};
             auto it = args.find("command");
             if (it == args.end()) return {false, "", "Missing command parameter"};
             std::string cmd = it->second + " 2>&1";
@@ -140,8 +333,8 @@ void ForgeAgent::registerBuiltinTools() {
             char buffer[4096];
             std::string result;
             while (fgets(buffer, sizeof(buffer), pipe) && result.size() < 8192) result += buffer;
-            pclose(pipe);
-            return {true, result, ""};
+            int rc = pclose(pipe);
+            return {true, result + "\n[exit code: " + std::to_string(rc >> 8) + "]", ""};
         }});
 
     // Tool: get_time
@@ -153,37 +346,53 @@ void ForgeAgent::registerBuiltinTools() {
             return {true, std::string(buf), ""};
         }});
 
-    // Tool: calculate
-    registerTool({"calculate", "Evaluate a mathematical expression", {"expression"},
+    // Tool: calculate — pure in-process evaluator (no shell, no python)
+    registerTool({"calculate", "Evaluate a mathematical expression",
+        {"expression"},
         [](const std::unordered_map<std::string, std::string>& args) -> ToolResult {
             auto it = args.find("expression");
             if (it == args.end()) return {false, "", "Missing expression"};
-            // Simple calculator: use python
-            std::string cmd = "python3 -c \"print(" + it->second + ")\" 2>/dev/null";
-            FILE* pipe = popen(cmd.c_str(), "r");
-            if (!pipe) return {false, "", "Calculator failed"};
-            char buf[256];
-            std::string result;
-            if (fgets(buf, sizeof(buf), pipe)) result = buf;
-            pclose(pipe);
-            // Trim newline
-            while (!result.empty() && result.back() == '\n') result.pop_back();
-            return result.empty() ? ToolResult{false, "", "Calculation failed"} : ToolResult{true, result, ""};
+            try {
+                return {true, SafeCalc::eval(it->second), ""};
+            } catch (const std::exception& e) {
+                return {false, "", e.what()};
+            }
         }});
 
-    // Tool: list_files
-    registerTool({"list_files", "List files in a directory", {"path"},
-        [](const std::unordered_map<std::string, std::string>& args) -> ToolResult {
+    // Tool: list_files — real filesystem API (no `ls` shell injection)
+    registerTool({"list_files", "List files in a directory inside the workspace",
+        {"path"},
+        [this](const std::unordered_map<std::string, std::string>& args) -> ToolResult {
             auto it = args.find("path");
             std::string path = (it != args.end()) ? it->second : ".";
-            std::string cmd = "ls -la " + path + " 2>/dev/null | head -30";
-            FILE* pipe = popen(cmd.c_str(), "r");
-            if (!pipe) return {false, "", "Failed to list files"};
-            char buffer[4096];
-            std::string result;
-            while (fgets(buffer, sizeof(buffer), pipe)) result += buffer;
-            pclose(pipe);
-            return {true, result, ""};
+            if (!pathAllowed(path))
+                return {false, "", "Sandbox: path outside workspace denied (" + path + ")"};
+            std::error_code ec;
+            fs::path dir = fs::canonical(fs::absolute(path), ec);
+            if (ec) dir = fs::absolute(path).lexically_normal();
+            if (!fs::is_directory(dir, ec)) return {false, "", "Not a directory: " + path};
+            struct Entry { std::string name; bool isDir; uintmax_t size; };
+            std::vector<Entry> entries;
+            for (auto& e : fs::directory_iterator(dir, ec)) {
+                entries.push_back({e.path().filename().string(),
+                                   e.is_directory(ec),
+                                   e.is_regular_file(ec) ? e.file_size(ec) : 0});
+                if (entries.size() >= 100) break;
+            }
+            std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) {
+                if (a.isDir != b.isDir) return a.isDir > b.isDir;
+                return a.name < b.name;
+            });
+            std::ostringstream out;
+            out << dir.string() << " (" << entries.size() << " entries)\n";
+            size_t shown = 0;
+            for (auto& e : entries) {
+                if (shown++ >= 30) { out << "... and " << (entries.size() - 30) << " more\n"; break; }
+                out << (e.isDir ? "[DIR]  " : "       ") << e.name;
+                if (!e.isDir) out << "  (" << e.size << " bytes)";
+                out << "\n";
+            }
+            return {true, out.str(), ""};
         }});
 
     // Tool: memory (conversation context)
@@ -210,6 +419,14 @@ void ForgeAgent::registerBuiltinTools() {
             }
             return {false, "", "Unknown action"};
         }});
+}
+
+std::string ForgeAgent::invokeTool(const std::string& name,
+                                   const std::unordered_map<std::string, std::string>& args) {
+    auto it = tools_.find(name);
+    if (it == tools_.end()) return "Error: tool '" + name + "' not found";
+    ToolResult tr = it->second.execute(args);
+    return tr.success ? tr.output : "Error: " + tr.error;
 }
 
 std::string ForgeAgent::getToolDescriptions() const {

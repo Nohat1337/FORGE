@@ -25,14 +25,26 @@
 
 namespace forge::fvm {
 
+bool g_globalTrustedMode = false;
+
 // Forward declarations for module definitions
 void defineFFIModule(ForgeVM& vm);
 void defineConcurrentModule(ForgeVM& vm);
 void defineLLMModule(ForgeVM& vm);
+void defineGuiModule(ForgeVM& vm);
 
 // ============================================================
 // Value <-> FValue Conversion
 // ============================================================
+
+// ============================================================
+// Constant-pool pre-conversion
+// ============================================================
+
+// Convert a function's chunk constants into FValues exactly once.
+// Nested FUNCTION constants are converted recursively (sharing the same
+// GCFunction across all closures created from it, like clox does).
+static void initFConstants(GCFunction* fn);
 
 FValue valueToFValue(const Value& v) {
     switch (v.type) {
@@ -62,6 +74,7 @@ FValue valueToFValue(const Value& v) {
                     gcFunc->upvalueCount = src->upvalueCount;
                     gcFunc->localCount = src->localCount;
                     gcFunc->name = src->name;
+                    initFConstants(gcFunc);
                     return FValue::obj(gcFunc);
                 }
                 case ObjType::NATIVE: {
@@ -154,6 +167,17 @@ FValue valueToFValue(const Value& v) {
         }
     }
     return FValue::nil();
+}
+
+static void initFConstants(GCFunction* fn) {
+    if (!fn || !fn->chunk || !fn->fconstants.empty()) return;
+    auto& consts = fn->chunk->constants;
+    fn->fconstants.reserve(consts.size());
+    // FUNCTION constants are converted via valueToFValue, which recursively
+    // initializes their own fconstants — so OP_CLOSURE shares one GCFunction
+    // instead of deep-copying the chunk on every closure creation.
+    for (auto& c : consts)
+        fn->fconstants.push_back(valueToFValue(c));
 }
 
 // ============================================================
@@ -596,14 +620,17 @@ bool ForgeVM::interpret(std::shared_ptr<GCFunction> function) {
 
     #define FVM_READ_BYTE() (*framePtr->ip++)
     #define FVM_READ_UINT16() (framePtr->ip += 2, (uint16_t)((framePtr->ip[-2] << 8) | framePtr->ip[-1]))
-    #define FVM_READ_CONSTANT() (valueToFValue(framePtr->closure->function->chunk->constants[FVM_READ_UINT16()]))
+    // Constants are pre-converted at load time (see initFConstants) — this
+    // lookup is a pure array read with zero allocations.
+    #define FVM_READ_CONSTANT() (framePtr->closure->function->fconstants[FVM_READ_UINT16()])
 
+restart:
+    try {
     while (thread.hasFrames()) {
         framePtr = &thread.currentFrame();
 
-        try {
-            uint8_t instruction = FVM_READ_BYTE();
-            switch (instruction) {
+        uint8_t instruction = FVM_READ_BYTE();
+        switch (instruction) {
                 case OP_CONSTANT: { thread.push(FVM_READ_CONSTANT()); break; }
                 case OP_NIL: thread.push(FValue::nil()); break;
                 case OP_TRUE: thread.push(FValue::boolean(true)); break;
@@ -1089,9 +1116,12 @@ bool ForgeVM::interpret(std::shared_ptr<GCFunction> function) {
                     if (!handleError("Unknown instruction: " + std::to_string(instruction))) return false;
                     break;
             }
-        } catch (const std::exception& e) {
-            if (!handleError(e.what())) return false;
-        }
+    }
+    } catch (const std::exception& e) {
+        // Exceptions (thrown by natives etc.) are handled OUTSIDE the dispatch
+        // loop so the hot path carries no per-instruction exception overhead.
+        if (!handleError(e.what())) return false;
+        goto restart;
     }
     return true;
 
@@ -1124,6 +1154,7 @@ bool ForgeVM::interpretSource(const std::string& source, const std::string& file
         gcFunc->upvalueCount = fn->upvalueCount;
         gcFunc->localCount = fn->localCount;
         gcFunc->name = fn->name;
+        initFConstants(gcFunc);
 
         auto sharedFn = std::shared_ptr<GCFunction>(gcFunc, [](GCFunction*){});
         return interpret(sharedFn);
@@ -1982,6 +2013,11 @@ void ForgeVM::defineModules() {
     }
     {
         defineSDL2Module(*this);
+    }
+
+    // GUI Kit — the FVM's Swing-like widget toolkit
+    {
+        defineGuiModule(*this);
     }
     {
         auto* testMod = new GCMap();

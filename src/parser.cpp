@@ -32,6 +32,7 @@ std::vector<StmtPtr> Parser::parse() {
 }
 
 StmtPtr Parser::parseStatement() {
+    DepthGuard guard(*this);
     if (check(TokenType::LET)) { advance(); return parseVarDecl(false); }
     if (check(TokenType::CONST)) { advance(); return parseVarDecl(true); }
     if (check(TokenType::FN)) { advance(); return parseFnDecl(); }
@@ -334,7 +335,10 @@ StmtPtr Parser::parseExternFn() {
 
 // ---- Expression Parsing ----
 
-ExprPtr Parser::parseExpression() { return parseAssignment(); }
+ExprPtr Parser::parseExpression() {
+    DepthGuard guard(*this);
+    return parseAssignment();
+}
 
 ExprPtr Parser::parseAssignment() {
     ExprPtr expr = parseTernary();
@@ -489,6 +493,12 @@ ExprPtr Parser::parsePrimary() {
     if (check(TokenType::FALSE)) { advance(); return makeExpr(BoolLiteral{false}); }
     if (check(TokenType::NIL)) { advance(); return makeExpr(NilLiteral{}); }
     if (check(TokenType::THIS)) { advance(); return makeExpr(ThisLiteral{}); }
+    if (check(TokenType::SUPER)) {
+        Token t = advance();
+        expect(TokenType::DOT, "Expected '.' after 'super'");
+        Token m = expect(TokenType::IDENTIFIER, "Expected method name after 'super.'");
+        return makeExpr(SuperExpr{m.value});
+    }
     if (check(TokenType::IDENTIFIER)) { Token t = advance(); return makeExpr(Identifier{t.value}); }
     if (check(TokenType::MATCH)) return parseMatchExpr();
     if (check(TokenType::FN)) { advance(); return parseFnExpr(); }
@@ -544,6 +554,15 @@ ExprPtr Parser::parseFnExpr() {
         while (match(TokenType::COMMA));
     }
     expect(TokenType::RPAREN, "Expected ')'");
+    // arrow form: fn(x) => expr  (implicit return)
+    if (match(TokenType::ARROW)) {
+        ExprPtr bodyExpr = parseExpression();
+        std::vector<StmtPtr> body;
+        auto ret = std::make_shared<Stmt>();
+        ret->node = ReturnStmt{bodyExpr};
+        body.push_back(ret);
+        return makeExpr(FnExpr{params, body});
+    }
     auto body = std::get<BlockStmt>(parseBlock()->node).statements;
     return makeExpr(FnExpr{params, body});
 }

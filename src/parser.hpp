@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <stdexcept>
 #include "lexer.hpp"
 #include "ast.hpp"
 
@@ -13,6 +14,20 @@ private:
     std::vector<Token> tokens_;
     int pos_;
     int lastLine_ = 1;
+    int depth_ = 0;
+
+    // RAII guard against stack exhaustion from deeply nested source
+    // (e.g. "((((((...))))))" bombs). Throws a clean error past the limit.
+    static constexpr int MAX_DEPTH = 512;
+    struct DepthGuard {
+        Parser& p;
+        explicit DepthGuard(Parser& parser) : p(parser) {
+            if (++p.depth_ > MAX_DEPTH)
+                throw std::runtime_error("Maximum nesting depth exceeded at line " +
+                                         std::to_string(p.peek().line));
+        }
+        ~DepthGuard() { --p.depth_; }
+    };
 
     Token peek() const;
     Token peekNext() const;

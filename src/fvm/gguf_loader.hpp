@@ -64,6 +64,21 @@ int ggml_dequantize_row(const uint8_t* src, float* dst, int64_t n, GGMLType type
 int64_t ggml_row_size(int64_t ne, GGMLType type);
 
 // ============================================================================
+// Memory-mapped file (zero-copy model loading)
+// ============================================================================
+
+struct MappedFile {
+    uint8_t* data = nullptr;
+    size_t size = 0;
+    void* handle = nullptr;   // platform mapping handle
+
+    bool open(const std::string& path);
+    void close();
+    bool ok() const { return data != nullptr && size > 0; }
+    ~MappedFile() { close(); }
+};
+
+// ============================================================================
 // LLaMA Tensor (holds weight data with lazy dequantization)
 // ============================================================================
 
@@ -73,6 +88,9 @@ struct LlamaTensor {
     std::vector<int64_t> shape;
     mutable std::vector<float> data_f32;
     mutable std::vector<uint8_t> data_raw;
+    // Zero-copy view into the mapped model file (preferred over data_raw)
+    const uint8_t* extData = nullptr;
+    int64_t extBytes = 0;
     bool loaded = false;
 
     int64_t numel() const {
@@ -177,6 +195,9 @@ struct LlamaModel {
     LlamaTensor outputProj;
     std::vector<LlamaLayer> layers;
     LlamaKVCache kvCache;
+
+    // Keeps the mapped model file alive while tensors reference it
+    std::shared_ptr<MappedFile> mappedFile;
 
     bool loaded = false;
 

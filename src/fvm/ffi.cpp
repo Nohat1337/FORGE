@@ -10,9 +10,23 @@ static long long nextHandle = 1;
 void ForgeFFI::defineModule(ForgeVM& vm) {
     auto* ffiMod = new GCMap();
 
+    // SECURITY: the FFI surface allows dlopen of arbitrary libraries,
+    // calls through arbitrary function pointers and raw memory R/W.
+    // The trust check is done lazily at CALL time (not module-definition
+    // time) so that `--trusted`, which is set after VM construction,
+    // actually takes effect.
+    ForgeVM* vmPtr = &vm;   // outlives the natives registered below
+    auto requireTrusted = [vmPtr](const char* fn) {
+        if (!vmPtr->isTrusted())
+            throw std::runtime_error(
+                std::string("ffi.") + fn + "() requires trusted mode — run forge with "
+                "--trusted to enable native interop (only for code you trust)");
+    };
+
     // ffi.open(path) -> handle
     // Opens a shared library using dlopen
-    ffiMod->entries["open"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+    ffiMod->entries["open"] = FValue::obj(new GCNative([requireTrusted](const std::vector<FValue>& args) -> FValue {
+        requireTrusted("open");
         if (args.size() != 1) throw std::runtime_error("ffi.open() expects 1 argument (path)");
         if (!args[0].isString()) throw std::runtime_error("ffi.open() expects a string path");
         std::string path = args[0].asString()->value;
@@ -27,7 +41,8 @@ void ForgeFFI::defineModule(ForgeVM& vm) {
     }, "ffi.open", 1));
 
     // ffi.close(handle) -> nil
-    ffiMod->entries["close"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+    ffiMod->entries["close"] = FValue::obj(new GCNative([requireTrusted](const std::vector<FValue>& args) -> FValue {
+        requireTrusted("close");
         if (args.size() != 1) throw std::runtime_error("ffi.close() expects 1 argument");
         long long h = args[0].asInteger();
         auto it = ffiLibraries.find(h);
@@ -38,8 +53,10 @@ void ForgeFFI::defineModule(ForgeVM& vm) {
     }, "ffi.close", 1));
 
     // ffi.sym(handle, name) -> pointer (as integer)
-    ffiMod->entries["sym"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+    ffiMod->entries["sym"] = FValue::obj(new GCNative([requireTrusted](const std::vector<FValue>& args) -> FValue {
+        requireTrusted("sym");
         if (args.size() != 2) throw std::runtime_error("ffi.sym() expects 2 arguments (handle, symbol_name)");
+        if (!args[1].isString()) throw std::runtime_error("ffi.sym() symbol name must be a string");
         long long h = args[0].asInteger();
         auto it = ffiLibraries.find(h);
         if (it == ffiLibraries.end()) throw std::runtime_error("ffi.sym() invalid handle");
@@ -51,7 +68,8 @@ void ForgeFFI::defineModule(ForgeVM& vm) {
 
     // ffi.call_int(ptr, args...) -> int
     // Calls a function pointer with integer arguments, returns int
-    ffiMod->entries["call_int"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+    ffiMod->entries["call_int"] = FValue::obj(new GCNative([requireTrusted](const std::vector<FValue>& args) -> FValue {
+        requireTrusted("call_int");
         if (args.size() < 1) throw std::runtime_error("ffi.call_int() expects at least 1 argument (function_ptr)");
         typedef long long (*FnPtr)(...);
         FnPtr fn = reinterpret_cast<FnPtr>(args[0].asInteger());
@@ -66,7 +84,8 @@ void ForgeFFI::defineModule(ForgeVM& vm) {
     }, "ffi.call_int"));
 
     // ffi.call_float(ptr, args...) -> float
-    ffiMod->entries["call_float"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+    ffiMod->entries["call_float"] = FValue::obj(new GCNative([requireTrusted](const std::vector<FValue>& args) -> FValue {
+        requireTrusted("call_float");
         if (args.size() < 1) throw std::runtime_error("ffi.call_float() expects at least 1 argument");
         typedef double (*FnPtr)(...);
         FnPtr fn = reinterpret_cast<FnPtr>(args[0].asInteger());
@@ -79,7 +98,8 @@ void ForgeFFI::defineModule(ForgeVM& vm) {
     }, "ffi.call_float"));
 
     // ffi.call_str(ptr, args...) -> string
-    ffiMod->entries["call_str"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+    ffiMod->entries["call_str"] = FValue::obj(new GCNative([requireTrusted](const std::vector<FValue>& args) -> FValue {
+        requireTrusted("call_str");
         if (args.size() < 1) throw std::runtime_error("ffi.call_str() expects at least 1 argument");
         typedef const char* (*FnPtr)(...);
         FnPtr fn = reinterpret_cast<FnPtr>(args[0].asInteger());
@@ -93,7 +113,8 @@ void ForgeFFI::defineModule(ForgeVM& vm) {
     }, "ffi.call_str"));
 
     // ffi.call_void(ptr, args...) -> nil
-    ffiMod->entries["call_void"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+    ffiMod->entries["call_void"] = FValue::obj(new GCNative([requireTrusted](const std::vector<FValue>& args) -> FValue {
+        requireTrusted("call_void");
         if (args.size() < 1) throw std::runtime_error("ffi.call_void() expects at least 1 argument");
         typedef void (*FnPtr)(...);
         FnPtr fn = reinterpret_cast<FnPtr>(args[0].asInteger());
@@ -106,7 +127,8 @@ void ForgeFFI::defineModule(ForgeVM& vm) {
     }, "ffi.call_void"));
 
     // ffi.str_ptr(str) -> integer (pointer to C string)
-    ffiMod->entries["str_ptr"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+    ffiMod->entries["str_ptr"] = FValue::obj(new GCNative([requireTrusted](const std::vector<FValue>& args) -> FValue {
+        requireTrusted("str_ptr");
         if (args.size() != 1) throw std::runtime_error("ffi.str_ptr() expects 1 argument");
         if (!args[0].isString()) throw std::runtime_error("ffi.str_ptr() expects a string");
         // Return pointer to the internal string data
@@ -129,19 +151,42 @@ void ForgeFFI::defineModule(ForgeVM& vm) {
     }, "ffi.sizeof_ptr", 0));
 
     // ffi.mem_read(ptr, size) -> array of integers (bytes)
-    ffiMod->entries["mem_read"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+    ffiMod->entries["mem_read"] = FValue::obj(new GCNative([requireTrusted](const std::vector<FValue>& args) -> FValue {
+        requireTrusted("mem_read");
         if (args.size() != 2) throw std::runtime_error("ffi.mem_read() expects 2 arguments (ptr, size)");
         const uint8_t* ptr = reinterpret_cast<const uint8_t*>(args[0].asInteger());
         long long size = args[1].asInteger();
+        if (size < 0 || size > (1LL << 30)) throw std::runtime_error("ffi.mem_read() invalid size");
         auto* arr = new GCArray();
+        arr->elements.reserve((size_t)size);
         for (long long i = 0; i < size; i++) {
             arr->elements.push_back(FValue::integer((long long)ptr[i]));
         }
         return FValue::obj(arr);
     }, "ffi.mem_read", 2));
 
+    // ffi.mem_alloc(size) -> ptr — allocate native memory for buffers
+    ffiMod->entries["mem_alloc"] = FValue::obj(new GCNative([requireTrusted](const std::vector<FValue>& args) -> FValue {
+        requireTrusted("mem_alloc");
+        if (args.size() != 1) throw std::runtime_error("ffi.mem_alloc() expects 1 argument (size)");
+        long long size = args[0].asInteger();
+        if (size < 0 || size > (256LL << 20)) throw std::runtime_error("ffi.mem_alloc() invalid size");
+        void* p = malloc((size_t)size);
+        if (!p) throw std::runtime_error("ffi.mem_alloc() out of memory");
+        return FValue::integer(reinterpret_cast<long long>(p));
+    }, "ffi.mem_alloc", 1));
+
+    // ffi.mem_free(ptr) -> nil
+    ffiMod->entries["mem_free"] = FValue::obj(new GCNative([requireTrusted](const std::vector<FValue>& args) -> FValue {
+        requireTrusted("mem_free");
+        if (args.size() != 1) throw std::runtime_error("ffi.mem_free() expects 1 argument (ptr)");
+        free(reinterpret_cast<void*>(args[0].asInteger()));
+        return FValue::nil();
+    }, "ffi.mem_free", 1));
+
     // ffi.mem_write(ptr, data) -> nil
-    ffiMod->entries["mem_write"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+    ffiMod->entries["mem_write"] = FValue::obj(new GCNative([requireTrusted](const std::vector<FValue>& args) -> FValue {
+        requireTrusted("mem_write");
         if (args.size() != 2) throw std::runtime_error("ffi.mem_write() expects 2 arguments (ptr, data_array)");
         uint8_t* ptr = reinterpret_cast<uint8_t*>(args[0].asInteger());
         if (!args[1].isArray()) throw std::runtime_error("ffi.mem_write() expects array for data");

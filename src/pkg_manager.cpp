@@ -8,10 +8,181 @@
 #include <filesystem>
 #include <cstdlib>
 #include <functional>
+#include <cstdio>
+
+#ifndef _WIN32
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/wait.h>
+#else
+#include <windows.h>
+#endif
 
 namespace fs = std::filesystem;
 
 static const char* REGISTRY_URL = "https://raw.githubusercontent.com/Nohat1337/FORGE/main/packages/registry.json";
+
+// ============================================================
+// Security helpers
+// ============================================================
+
+// Package names come from CLI args AND from registry JSON (attacker-influenced).
+// Restrict to a strict charset so names can never form paths or shell metachars.
+static bool isValidPkgName(const std::string& name) {
+    if (name.empty() || name.size() > 128) return false;
+    if (name[0] == '.') return false;
+    for (char c : name) {
+        bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                  (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.';
+        if (!ok) return false;
+    }
+    // Reject traversal-looking names even though '/' is already banned
+    if (name == "." || name == "..") return false;
+    if (name.find("..") != std::string::npos) return false;
+    return true;
+}
+
+// True only if 'candidate' resolves strictly inside directory 'base'.
+static bool isPathInsideDir(const fs::path& base, const fs::path& candidate) {
+    std::error_code ec;
+    fs::path cb = fs::weakly_canonical(base, ec);
+    if (ec) return false;
+    fs::path cc = fs::weakly_canonical(candidate, ec);
+    if (ec) return false;
+    std::string b = cb.string();
+    std::string c = cc.string();
+    while (!b.empty() && b.back() == '/') b.pop_back();
+    if (b.empty()) return false;
+    if (c == b) return true;
+    return c.size() > b.size() && c.compare(0, b.size(), b) == 0 && c[b.size()] == '/';
+}
+
+// Run a process directly (no shell). Returns exit code, -1 on spawn failure.
+// If captureOut is non-null, stdout is captured into it.
+// If outFile is non-empty, stdout is written to that file instead.
+static int runProcess(const std::vector<std::string>& args,
+                      std::string* captureOut = nullptr,
+                      const std::string& outFile = "") {
+#ifndef _WIN32
+    // Temp file used for stdout capture (avoids pipe deadlock complexity)
+    FILE* tmp = nullptr;
+    int outFd = -1;
+    if (!outFile.empty()) {
+        FILE* f = fopen(outFile.c_str(), "wb");
+        if (!f) return -1;
+        outFd = fileno(f);
+    } else if (captureOut) {
+        tmp = tmpfile();
+        if (!tmp) return -1;
+        outFd = fileno(tmp);
+    }
+
+    fflush(nullptr);
+    pid_t pid = fork();
+    if (pid < 0) {
+        if (tmp) fclose(tmp);
+        return -1;
+    }
+    if (pid == 0) {
+        if (outFd >= 0) {
+            dup2(outFd, STDOUT_FILENO);
+        }
+        // stderr -> /dev/null to keep output clean
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            dup2(devnull, STDERR_FILENO);
+            close(devnull);
+        }
+        std::vector<char*> argv;
+        argv.reserve(args.size() + 1);
+        for (const auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
+        argv.push_back(nullptr);
+        execvp(argv[0], argv.data());
+        _exit(127);
+    }
+    if (tmp) fclose(tmp);
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+
+    if (tmp) {
+        if (captureOut) {
+            rewind(tmp);
+            char buf[4096];
+            size_t n;
+            while ((n = fread(buf, 1, sizeof(buf), tmp)) > 0)
+                captureOut->append(buf, n);
+        }
+        fclose(tmp);
+    }
+    return code;
+#else
+    // Windows: build an escaped command line and use CreateProcess (no cmd.exe)
+    std::string cmdline;
+    for (size_t i = 0; i < args.size(); i++) {
+        if (i > 0) cmdline += " ";
+        cmdline += "\"";
+        for (char ch : args[i]) {
+            if (ch == '"') cmdline += "\\\"";
+            else cmdline += ch;
+        }
+        cmdline += "\"";
+    }
+    STARTUPINFOA si{};
+    PROCESS_INFORMATION pi{};
+    si.cb = sizeof(si);
+    HANDLE outHandle = INVALID_HANDLE_VALUE;
+    SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
+    std::string tmpCapturePath;
+    if (!outFile.empty()) {
+        outHandle = CreateFileA(outFile.c_str(), GENERIC_WRITE, 0, &sa,
+                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (outHandle == INVALID_HANDLE_VALUE) return -1;
+    } else if (captureOut) {
+        char tmpPath[MAX_PATH];
+        char tmpName[MAX_PATH];
+        if (!GetTempPathA(MAX_PATH, tmpPath) ||
+            !GetTempFileNameA(tmpPath, "fge", 0, tmpName)) return -1;
+        tmpCapturePath = tmpName;
+        outHandle = CreateFileA(tmpName, GENERIC_WRITE | GENERIC_READ, 0, &sa,
+                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (outHandle == INVALID_HANDLE_VALUE) return -1;
+    }
+    if (outHandle != INVALID_HANDLE_VALUE) {
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdOutput = outHandle;
+        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    }
+    BOOL ok = CreateProcessA(nullptr, cmdline.data(), nullptr, nullptr, TRUE,
+                             0, nullptr, nullptr, &si, &pi);
+    int code = -1;
+    if (ok) {
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        DWORD ec2 = 0;
+        GetExitCodeProcess(pi.hProcess, &ec2);
+        code = (int)ec2;
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+    if (outHandle != INVALID_HANDLE_VALUE) {
+        CloseHandle(outHandle);
+        if (captureOut && !tmpCapturePath.empty()) {
+            std::ifstream f(tmpCapturePath, std::ios::binary);
+            std::stringstream ss;
+            ss << f.rdbuf();
+            *captureOut = ss.str();
+            DeleteFileA(tmpCapturePath.c_str());
+        }
+    }
+    return code;
+#endif
+}
+
+static bool curlAvailable() {
+    return runProcess({"curl", "--version"}) == 0;
+}
 
 static std::string getHomeDir() {
 #ifdef _WIN32
@@ -150,15 +321,10 @@ static std::string jsonExtractSection(const std::string& json, const std::string
 // ============================================================
 
 static std::string curlFetch(const std::string& url) {
-    std::string cmd = "curl -sL --connect-timeout 10 --max-time 30 \"" + url + "\" 2>/dev/null";
-    std::array<char, 256> buffer;
     std::string result;
-    FILE* pipe = popen(cmd.c_str(), "r");
-    if (!pipe) return "";
-    while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
-        result += buffer.data();
-    }
-    pclose(pipe);
+    // Runs curl directly via execvp — no shell, no injection surface
+    runProcess({"curl", "-sL", "--connect-timeout", "10", "--max-time", "30", url},
+               &result);
     return result;
 }
 
@@ -168,8 +334,8 @@ static std::string curlFetch(const std::string& url) {
 
 static bool downloadFile(const std::string& url, const std::string& destPath) {
     fs::create_directories(fs::path(destPath).parent_path().string());
-    std::string cmd = "curl -sL --connect-timeout 10 --max-time 60 -o \"" + destPath + "\" \"" + url + "\" 2>/dev/null";
-    int ret = system(cmd.c_str());
+    int ret = runProcess({"curl", "-sL", "--connect-timeout", "10",
+                          "--max-time", "60", "-o", destPath, url});
     return ret == 0 && fs::exists(destPath);
 }
 
@@ -286,7 +452,18 @@ static bool isInstalled(const std::string& name) {
 // ============================================================
 
 static bool installPkgFiles(const PkgInfo& pkg) {
-    std::string pkgDir = getInstallDir() + "/" + pkg.name;
+    // Defense in depth: registry-supplied names are untrusted input
+    if (!isValidPkgName(pkg.name)) {
+        std::cerr << "Error: Invalid package name '" << pkg.name << "'.\n";
+        return false;
+    }
+    const fs::path baseDir = getInstallDir();
+    fs::path pkgPath = baseDir / pkg.name;
+    if (!isPathInsideDir(baseDir, pkgPath)) {
+        std::cerr << "Error: Refusing to install outside " << baseDir.string() << "\n";
+        return false;
+    }
+    std::string pkgDir = pkgPath.string();
     fs::create_directories(pkgDir);
 
     std::string baseUrl = "https://raw.githubusercontent.com/Nohat1337/FORGE/main/";
@@ -330,21 +507,17 @@ static bool installPkgFiles(const PkgInfo& pkg) {
         std::string fileUrl = baseUrl + "lib/" + pkg.name + "/" + file;
         std::string dest = pkgDir + "/" + file;
 
-        // Check if file exists at URL (HEAD request)
-        std::string checkCmd = "curl -sL --connect-timeout 5 --max-time 10 -o /dev/null -w '%{http_code}' \"" + fileUrl + "\" 2>/dev/null";
-        std::array<char, 16> httpCode{};
-        FILE* pipe = popen(checkCmd.c_str(), "r");
-        if (pipe) {
-            fgets(httpCode.data(), httpCode.size(), pipe);
-            pclose(pipe);
-        }
-
-        std::string code(httpCode.data());
+        // Check if file exists at URL (HEAD-style request)
+        std::string httpCode;
+        runProcess({"curl", "-sL", "--connect-timeout", "5", "--max-time", "10",
+                    "-o", "/dev/null", "-w", "%{http_code}", fileUrl},
+                   &httpCode);
         // Trim whitespace
-        while (!code.empty() && (code.back() == '\n' || code.back() == '\r' || code.back() == ' '))
-            code.pop_back();
+        while (!httpCode.empty() &&
+               (httpCode.back() == '\n' || httpCode.back() == '\r' || httpCode.back() == ' '))
+            httpCode.pop_back();
 
-        if (code == "200") {
+        if (httpCode == "200") {
             if (downloadFile(fileUrl, dest)) {
                 std::cerr << "  Downloaded lib/" << pkg.name << "/" << file << "\n";
                 anyDownloaded = true;
@@ -545,6 +718,12 @@ static int cmdInstall(int argc, char* argv[]) {
         pkgName = pkgName.substr(0, at);
     }
 
+    if (!isValidPkgName(pkgName)) {
+        std::cerr << "Error: Invalid package name '" << pkgName << "'.\n";
+        std::cerr << "Names may contain only letters, digits, '.', '_' and '-'.\n";
+        return 1;
+    }
+
     // Check if already installed
     if (isInstalled(pkgName)) {
         std::cout << pkgName << " is already installed.\n";
@@ -601,6 +780,10 @@ static int cmdRemove(int argc, char* argv[]) {
     }
 
     std::string pkgName = argv[0];
+    if (!isValidPkgName(pkgName)) {
+        std::cerr << "Error: Invalid package name '" << pkgName << "'.\n";
+        return 1;
+    }
     auto installed = loadInstalled();
     bool found = false;
 
@@ -619,8 +802,15 @@ static int cmdRemove(int argc, char* argv[]) {
 
     saveInstalled(installed);
 
-    // Remove downloaded files
-    std::string pkgDir = getInstallDir() + "/" + pkgName;
+    // Remove downloaded files — with containment check so a tampered
+    // installed.json can never delete arbitrary directories
+    fs::path baseDir = getInstallDir();
+    fs::path pkgPath = baseDir / pkgName;
+    if (!isPathInsideDir(baseDir, pkgPath)) {
+        std::cerr << "Error: Refusing to remove path outside " << baseDir.string() << "\n";
+        return 1;
+    }
+    std::string pkgDir = pkgPath.string();
     if (fs::exists(pkgDir)) {
         fs::remove_all(pkgDir);
         std::cout << "Removed " << pkgDir << "\n";
@@ -843,7 +1033,23 @@ int pkg_main(int argc, char* argv[]) {
         }
         std::string tokenDir = getForgeDir();
         fs::create_directories(tokenDir);
-        writeSmallFile(tokenDir + "/token", token);
+        // Write with owner-only permissions (0600) — never world-readable
+        std::string tokenPath = tokenDir + "/token";
+#ifndef _WIN32
+        int fd = open(tokenPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (fd < 0) {
+            std::cerr << "Error: Cannot write to " << tokenPath << "\n";
+            return 1;
+        }
+        ssize_t written = write(fd, token.data(), token.size());
+        close(fd);
+        if (written < 0) {
+            std::cerr << "Error: Cannot write to " << tokenPath << "\n";
+            return 1;
+        }
+#else
+        writeSmallFile(tokenPath, token);
+#endif
         std::cout << "Login successful.\n";
         return 0;
     } else if (cmd == "logout") {

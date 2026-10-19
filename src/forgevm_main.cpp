@@ -4,6 +4,8 @@
 #include "fvm/forge_ide.hpp"
 #include "pkg_manager.hpp"
 #include "forge_build.hpp"
+#include "java_backend.hpp"
+#include "lib_cmd.hpp"
 #include "compiler.hpp"
 #include "lexer.hpp"
 #include "parser.hpp"
@@ -79,11 +81,14 @@ int main(int argc, char* argv[]) {
             std::cout << "  -h, --help       Show this help\n";
             std::cout << "  -e <code>        Execute string as code\n";
             std::cout << "  compile <f> [o]  Compile .fge to .fclass bytecode\n";
+            std::cout << "  java <f> [opts]  Transpile .fge to Java / build a runnable .jar\n";
+            std::cout << "  lib new|build    Native library scaffolding (C ABI / ffi)\n";
             std::cout << "  pkg <cmd>        Package manager commands\n";
             std::cout << "  build            Build project from ForgeLists.txt\n";
             std::cout << "  --sdl, gui       Launch the SDL2 windowed UI for the FVM\n";
             std::cout << "  --ide            Launch the Forge IDE\n";
             std::cout << "  --gc-stats       Show GC statistics after execution\n";
+            std::cout << "  --trusted        Enable trusted mode (FFI, raw memory access)\n";
             std::cout << "  (no args)        Start REPL\n";
             return 0;
         } else if (arg == "-e") {
@@ -97,6 +102,14 @@ int main(int argc, char* argv[]) {
             int pkgArgc = argc - i - 1;
             char** pkgArgv = argv + i + 1;
             return pkg_main(pkgArgc, pkgArgv);
+        } else if (arg == "java") {
+            int javaArgc = argc - i;
+            char** javaArgv = argv + i;   // includes "java" at argv[0] position
+            return forge::javabackend::java_main(javaArgc, javaArgv);
+        } else if (arg == "lib") {
+            int libArgc = argc - i;
+            char** libArgv = argv + i;
+            return forge::libcmd::lib_main(libArgc, libArgv);
         } else if (arg == "build") {
             int buildArgc = argc - i - 1;
             char** buildArgv = argv + i + 1;
@@ -306,11 +319,14 @@ int main(int argc, char* argv[]) {
     }
 
     bool showGcStats = false;
+    bool trusted = false;
     std::string filename;
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--gc-stats") {
             showGcStats = true;
+        } else if (arg == "--trusted") {
+            trusted = true;
         } else if (filename.empty()) {
             filename = arg;
         }
@@ -324,6 +340,7 @@ int main(int argc, char* argv[]) {
     try {
         forge::fvm::ForgeVM vm;
         vm.setArgs(argc, argv);
+        vm.setTrustedMode(trusted);
         if (filename.size() >= 7 && filename.substr(filename.size() - 7) == ".fclass") {
             if (!vm.interpretClassFile(filename)) {
                 return 1;

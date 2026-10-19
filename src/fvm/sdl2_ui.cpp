@@ -337,7 +337,9 @@ bool SDL2UI::pumpEvents(SDLKeyEvent* key, SDLMouseEvent* mouse, SDLWindowEvent* 
     if (win) *win = SDLWindowEvent{};
 
     SDL_Event e;
-    bool gotKey = false, gotMouse = false, gotWin = false;
+    bool gotKey = false, gotWin = false;
+    // Mouse flags accumulate across the whole drain: a press, release,
+    // motion and wheel can all legitimately occur within one frame.
     while (SDL_PollEvent(&e)) {
         switch (e.type) {
             case SDL_QUIT:
@@ -367,39 +369,30 @@ bool SDL2UI::pumpEvents(SDLKeyEvent* key, SDLMouseEvent* mouse, SDLWindowEvent* 
                 }
                 break;
             case SDL_MOUSEBUTTONDOWN:
-                if (mouse && !gotMouse) {
-                    mouse->x = e.button.x;
-                    mouse->y = e.button.y;
-                    mouse->button = e.button.button;
-                    mouse->pressed = true;
-                    gotMouse = true;
-                }
+                mouse->x = lastMouseX_ = e.button.x;
+                mouse->y = lastMouseY_ = e.button.y;
+                mouse->button = e.button.button;
+                mouse->pressed = true;
                 break;
             case SDL_MOUSEBUTTONUP:
-                if (mouse && !gotMouse) {
-                    mouse->x = e.button.x;
-                    mouse->y = e.button.y;
-                    mouse->button = e.button.button;
-                    mouse->released = true;
-                    gotMouse = true;
-                }
+                mouse->x = lastMouseX_ = e.button.x;
+                mouse->y = lastMouseY_ = e.button.y;
+                mouse->button = e.button.button;
+                mouse->released = true;
                 break;
             case SDL_MOUSEMOTION:
-                if (mouse && !gotMouse) {
-                    mouse->x = e.motion.x;
-                    mouse->y = e.motion.y;
-                    mouse->motion = true;
-                    gotMouse = true;
-                }
+                mouse->x = lastMouseX_ = e.motion.x;
+                mouse->y = lastMouseY_ = e.motion.y;
+                mouse->motion = true;
                 break;
             case SDL_MOUSEWHEEL:
-                if (mouse && !gotMouse) {
-                    mouse->wheel = e.wheel.y;
-                    gotMouse = true;
-                }
+                mouse->wheel += e.wheel.y;
                 break;
         }
     }
+    // Always report the persistent cursor position so hover hit-testing
+    // works on every frame, not just frames that carried a mouse event.
+    if (mouse) { mouse->x = lastMouseX_; mouse->y = lastMouseY_; }
     return true;
 }
 
@@ -417,6 +410,22 @@ bool SDL2UI::button(int x, int y, int w, int h, const std::string& label,
 
 bool SDL2UI::saveScreenshot(const std::string& path) {
     if (!renderer_) return false;
+    // SDL2 core can only write BMP — fix a wrong extension instead of
+    // silently producing mislabeled files.
+    std::string outPath = path;
+    auto endsWith = [](const std::string& s, const char* suf) {
+        size_t n = std::strlen(suf);
+        return s.size() >= n && s.compare(s.size() - n, n, suf) == 0;
+    };
+    if (!endsWith(path, ".bmp") && !endsWith(path, ".BMP")) {
+        auto slash = outPath.find_last_of("/\\");
+        auto dot = outPath.find_last_of('.');
+        if (dot == std::string::npos || (slash != std::string::npos && dot < slash))
+            outPath += ".bmp";
+        else
+            outPath = outPath.substr(0, dot) + ".bmp";
+        std::cerr << "note: SDL2 writes BMP only — saved as " << outPath << "\n";
+    }
     int w = 0, h = 0;
     SDL_GetRendererOutputSize(renderer_, &w, &h);
     if (w <= 0 || h <= 0) return false;
@@ -425,7 +434,7 @@ bool SDL2UI::saveScreenshot(const std::string& path) {
     int r = SDL_RenderReadPixels(renderer_, nullptr, SDL_PIXELFORMAT_RGBA32,
                                   surf->pixels, surf->pitch);
     bool ok = (r == 0);
-    if (ok) ok = (SDL_SaveBMP(surf, path.c_str()) == 0);
+    if (ok) ok = (SDL_SaveBMP(surf, outPath.c_str()) == 0);
     SDL_FreeSurface(surf);
     return ok;
 }

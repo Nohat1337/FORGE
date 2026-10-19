@@ -11,6 +11,11 @@
 #include <numeric>
 #include <random>
 #include <cassert>
+#include <thread>
+#include <atomic>
+#include <functional>
+#include <mutex>
+#include <condition_variable>
 
 namespace forge {
 namespace fvm {
@@ -23,90 +28,136 @@ class GGUFReader {
 public:
     GGUFHeader header;
     std::vector<uint8_t> fileData;
-    
+
+    // Hard limits against crafted/malicious GGUF files
+    static constexpr uint64_t MAX_KV = 100000;
+    static constexpr uint64_t MAX_TENSORS = 100000;
+    static constexpr uint64_t MAX_STRING_LEN = 64 * 1024 * 1024;   // 64 MB
+    static constexpr uint64_t MAX_ARRAY_LEN = 4 * 1000 * 1000;     // 4M elements
+    static constexpr uint32_t MAX_NDIMS = 8;
+    static constexpr uint32_t MAX_NAME_LEN = 4096;
+    static constexpr int MAX_ARRAY_DEPTH = 8;
+
     bool load(const std::string& path) {
         std::ifstream f(path, std::ios::binary);
         if (!f.is_open()) return false;
-        
+
         f.seekg(0, std::ios::end);
-        fileData.resize(f.tellg());
+        std::streamoff fsz = f.tellg();
+        if (fsz < 24) { fprintf(stderr, "[GGUF] File too small\n"); return false; }
+        fileData.resize((size_t)fsz);
         f.seekg(0);
         f.read((char*)fileData.data(), fileData.size());
+        if (!f) { fprintf(stderr, "[GGUF] Short read\n"); return false; }
         pos_ = 0;
         data_ = fileData.data();
         size_ = fileData.size();
-        
+
         // Magic
         char magic[4];
         read(magic, 4);
-        if (memcmp(magic, "GGUF", 4) != 0) {
+        if (!ok_ || memcmp(magic, "GGUF", 4) != 0) {
             fprintf(stderr, "[GGUF] Invalid magic\n");
             return false;
         }
-        
+
         header.version = readU32();
         header.nTensors = readU64();
         header.nKV = readU64();
-        
+
+        if (header.version == 0 || header.version > 3) {
+            fprintf(stderr, "[GGUF] Unsupported version %u\n", header.version);
+            return false;
+        }
+        if (header.nKV > MAX_KV || header.nTensors > MAX_TENSORS) {
+            fprintf(stderr, "[GGUF] Header counts out of range\n");
+            return false;
+        }
+
         // KV metadata
-        for (uint64_t i = 0; i < header.nKV; i++) {
+        for (uint64_t i = 0; i < header.nKV && ok_; i++) {
             uint64_t keyLen = readU64();
-            if (keyLen > 1024 || pos_ + keyLen > size_) {
+            if (!ok_ || keyLen > MAX_NAME_LEN || !require(keyLen)) {
                 return false;
             }
             std::string key((char*)(data_ + pos_), keyLen);
             pos_ += keyLen;
-            
+
             GGUFType vtype = (GGUFType)readU32();
-            if ((uint32_t)vtype > 12) {
+            if (!ok_ || (uint32_t)vtype > 12) {
                 return false;
             }
             GGUFValue val = readValue(vtype);
+            if (!ok_) return false;
             val.type = vtype;
             header.metadata[key] = std::move(val);
         }
-        
+
         // Tensor info
-        header.tensors.resize(header.nTensors);
-        for (uint64_t i = 0; i < header.nTensors; i++) {
+        header.tensors.resize((size_t)header.nTensors);
+        for (uint64_t i = 0; i < header.nTensors && ok_; i++) {
             auto& ti = header.tensors[i];
-            
+
             uint64_t nameLen = readU64();
+            if (!ok_ || nameLen > MAX_NAME_LEN || !require(nameLen)) return false;
             ti.name.assign((char*)(data_ + pos_), nameLen);
             pos_ += nameLen;
-            
+
             uint32_t nDims = readU32();
+            if (!ok_ || nDims == 0 || nDims > MAX_NDIMS) return false;
             ti.dimensions.resize(nDims);
             for (uint32_t d = 0; d < nDims; d++) {
                 ti.dimensions[d] = readU64();
+                if (!ok_) return false;
+                // reject absurd dims early (also guards int64 overflow in numel)
+                if (ti.dimensions[d] == 0 || ti.dimensions[d] > (uint64_t)1 << 40) return false;
             }
             ti.type = (GGMLType)readU32();
             ti.offset = readU64();
+            if (!ok_) return false;
         }
-        
+        if (!ok_) return false;
+
         header.dataOffset = (pos_ + 31) & ~((uint64_t)31);
-        
+        if (header.dataOffset > size_) return false;
+
         return true;
     }
-    
-    const uint8_t* tensorData(const GGUFTensorInfo& ti) const {
-        return data_ + header.dataOffset + ti.offset;
+
+    // Returns pointer to raw tensor bytes, or nullptr if out of file bounds.
+    const uint8_t* tensorData(const GGUFTensorInfo& ti, int64_t expectedBytes) const {
+        uint64_t start = header.dataOffset + ti.offset;   // both < 2^41, no overflow
+        if (start > size_) return nullptr;
+        if (expectedBytes < 0) return nullptr;
+        if ((uint64_t)expectedBytes > size_ - start) return nullptr;
+        return data_ + start;
     }
-    
+
 private:
     const uint8_t* data_ = nullptr;
     size_t size_ = 0;
     size_t pos_ = 0;
-    
-    void read(void* dst, size_t n) { memcpy(dst, data_ + pos_, n); pos_ += n; }
-    uint8_t readU8() { return data_[pos_++]; }
-    uint16_t readU16() { uint16_t v; memcpy(&v, data_ + pos_, 2); pos_ += 2; return v; }
-    uint32_t readU32() { uint32_t v; memcpy(&v, data_ + pos_, 4); pos_ += 4; return v; }
-    uint64_t readU64() { uint64_t v; memcpy(&v, data_ + pos_, 8); pos_ += 8; return v; }
-    
+    bool ok_ = true;
+    int depth_ = 0;
+
+    bool require(size_t n) {
+        return ok_ && n <= size_ && pos_ <= size_ - n;
+    }
+    void fail() { ok_ = false; }
+
+    void read(void* dst, size_t n) {
+        if (!require(n)) { fail(); memset(dst, 0, n); return; }
+        memcpy(dst, data_ + pos_, n); pos_ += n;
+    }
+    uint8_t readU8() { uint8_t v = 0; read(&v, 1); return v; }
+    uint16_t readU16() { uint16_t v = 0; read(&v, 2); return v; }
+    uint32_t readU32() { uint32_t v = 0; read(&v, 4); return v; }
+    uint64_t readU64() { uint64_t v = 0; read(&v, 8); return v; }
+
     GGUFValue readValue(GGUFType type) {
         GGUFValue v;
         v.type = type;
+        if (depth_ > MAX_ARRAY_DEPTH) { fail(); return v; }
         switch (type) {
             case GGUFType::UINT8: case GGUFType::INT8:
                 v.u64_val = readU8(); break;
@@ -115,30 +166,37 @@ private:
             case GGUFType::UINT32: case GGUFType::INT32:
                 v.u64_val = readU32(); break;
             case GGUFType::FLOAT32: {
-                float f; memcpy(&f, data_ + pos_, 4); pos_ += 4; v.f64_val = f; break;
+                float f = 0; read(&f, 4); v.f64_val = f; break;
             }
             case GGUFType::BOOL:
                 v.u64_val = readU8(); break;
             case GGUFType::STRING: {
                 uint64_t len = readU64();
-                v.s.assign((char*)(data_ + pos_), len);
+                if (!ok_ || len > MAX_STRING_LEN || !require((size_t)len)) { fail(); return v; }
+                v.s.assign((char*)(data_ + pos_), (size_t)len);
                 pos_ += len;
                 break;
             }
             case GGUFType::ARRAY: {
                 uint32_t arrType = readU32();
                 uint64_t arrLen = readU64();
-                v.arr.resize(arrLen);
-                for (uint64_t i = 0; i < arrLen; i++) {
-                    v.arr[i] = readValue((GGUFType)arrType);
+                if (!ok_ || (uint32_t)arrType > 12 || arrLen > MAX_ARRAY_LEN) { fail(); return v; }
+                depth_++;
+                v.arr.resize((size_t)arrLen);
+                for (uint64_t i = 0; i < arrLen && ok_; i++) {
+                    v.arr[(size_t)i] = readValue((GGUFType)arrType);
                 }
+                depth_--;
+                if (!ok_) v.arr.clear();
                 break;
             }
             case GGUFType::UINT64: case GGUFType::INT64:
                 v.u64_val = readU64(); break;
             case GGUFType::FLOAT64: {
-                memcpy(&v.f64_val, data_ + pos_, 8); pos_ += 8; break;
+                double d = 0; read(&d, 8); v.f64_val = d; break;
             }
+            default:
+                fail();
         }
         return v;
     }
@@ -396,16 +454,48 @@ bool LlamaModel::loadFromGGUF(const std::string& path) {
     fprintf(stderr, "[LLAMA] Vocab=%d Context=%d\n", config.vocabSize, config.contextLength);
     
     loadTokenizer(hdr);
-    
-    layers.resize(config.nLayers);
-    
+
+    // ---- Config validation (guards against malicious metadata) ----
+    auto inRange = [](int32_t v, int32_t lo, int32_t hi) { return v >= lo && v <= hi; };
+    if (!inRange(config.nLayers, 1, 512) || !inRange(config.nHeads, 1, 512) ||
+        !inRange(config.dModel, 16, 65536) || !inRange(config.vocabSize, 16, 2 * 1000 * 1000) ||
+        !inRange(config.contextLength, 64, 1024 * 1024)) {
+        fprintf(stderr, "[GGUF] Model config out of safe range (layers=%d heads=%d dModel=%d vocab=%d)\n",
+                config.nLayers, config.nHeads, config.dModel, config.vocabSize);
+        return false;
+    }
+    if (config.nKVHeads <= 0 || config.nKVHeads > config.nHeads) config.nKVHeads = config.nHeads;
+    if (config.dModel % config.nHeads != 0) {
+        fprintf(stderr, "[GGUF] dModel not divisible by head count\n");
+        return false;
+    }
+    if (config.headDim <= 0 || config.headDim > 1024) {
+        fprintf(stderr, "[GGUF] headDim out of safe range\n");
+        return false;
+    }
+
+    layers.resize((size_t)config.nLayers);
+
     // Load tensors
     for (auto& ti : hdr.tensors) {
-        const uint8_t* raw = reader.tensorData(ti);
+        // overflow-safe element count
         int64_t ne = 1;
-        for (auto d : ti.dimensions) ne *= d;
+        bool overflow = false;
+        for (auto d : ti.dimensions) {
+            if (d != 0 && ne > (((int64_t)1 << 62) / d)) { overflow = true; break; }
+            ne *= (int64_t)d;
+        }
+        if (overflow || ne <= 0) {
+            fprintf(stderr, "[GGUF] Skipping tensor '%s': bad size\n", ti.name.c_str());
+            continue;
+        }
         int64_t nbytes = ggml_row_size(ne, ti.type);
-        
+        const uint8_t* raw = reader.tensorData(ti, nbytes);
+        if (!raw) {
+            fprintf(stderr, "[GGUF] Skipping tensor '%s': data out of file bounds\n", ti.name.c_str());
+            continue;
+        }
+
         auto loadTensor = [&](LlamaTensor& t) {
             t.name = ti.name;
             t.ggmlType = ti.type;
@@ -413,12 +503,18 @@ bool LlamaModel::loadFromGGUF(const std::string& path) {
             t.data_raw.assign(raw, raw + nbytes);
             t.loaded = true;
         };
-        
+
         if (ti.name == "token_embd.weight") loadTensor(tokenEmb);
         else if (ti.name == "output_norm.weight") loadTensor(outputNorm);
         else if (ti.name == "output.weight") loadTensor(outputProj);
         else if (ti.name.find("blk.") == 0) {
-            int li = std::stoi(ti.name.substr(4));
+            std::string idxStr = ti.name.substr(4, ti.name.find('.', 4) - 4);
+            int li = -1;
+            bool allDigits = !idxStr.empty() &&
+                std::all_of(idxStr.begin(), idxStr.end(), ::isdigit);
+            if (allDigits) {
+                try { li = std::stoi(idxStr); } catch (...) { li = -1; }
+            }
             if (li >= 0 && li < config.nLayers) {
                 if (ti.name.find("attn_q.weight") != std::string::npos) loadTensor(layers[li].qProj);
                 else if (ti.name.find("attn_k.weight") != std::string::npos) loadTensor(layers[li].kProj);
@@ -432,15 +528,43 @@ bool LlamaModel::loadFromGGUF(const std::string& path) {
             }
         }
     }
-    
-    fprintf(stderr, "[LLAMA] Dequantizing to float32...\n");
-    tokenEmb.as_float();
-    outputNorm.as_float();
-    if (outputProj.loaded) outputProj.as_float();
-    for (auto& l : layers) {
-        l.qProj.as_float(); l.kProj.as_float(); l.vProj.as_float(); l.oProj.as_float();
-        l.gateProj.as_float(); l.upProj.as_float(); l.downProj.as_float();
-        l.attnNorm.as_float(); l.ffnNorm.as_float();
+
+    // ---- Parallel eager dequantization (uses all cores) ----
+    {
+        std::vector<LlamaTensor*> tensors;
+        tensors.push_back(&tokenEmb);
+        tensors.push_back(&outputNorm);
+        if (outputProj.loaded) tensors.push_back(&outputProj);
+        for (auto& l : layers) {
+            LlamaLayer* lp = &l;
+            tensors.insert(tensors.end(),
+                {&lp->qProj, &lp->kProj, &lp->vProj, &lp->oProj,
+                 &lp->gateProj, &lp->upProj, &lp->downProj,
+                 &lp->attnNorm, &lp->ffnNorm});
+        }
+
+        unsigned hw = std::thread::hardware_concurrency();
+        size_t nThreads = tensors.size() < 8 ? 1 : std::max(2u, std::min(hw ? hw : 2u, 16u));
+
+        if (nThreads <= 1 || tensors.size() < 2) {
+            for (auto* t : tensors) if (t->loaded) t->as_float();
+        } else {
+            fprintf(stderr, "[GGUF] Dequantizing with %zu threads...\n", nThreads);
+            std::atomic<size_t> next{0};
+            auto worker = [&]() {
+                for (;;) {
+                    size_t i = next.fetch_add(1);
+                    if (i >= tensors.size()) break;
+                    LlamaTensor* t = tensors[i];
+                    if (t->loaded) t->as_float();
+                }
+            };
+            std::vector<std::thread> pool;
+            pool.reserve(nThreads - 1);
+            for (size_t i = 0; i < nThreads - 1; i++) pool.emplace_back(worker);
+            worker();
+            for (auto& th : pool) th.join();
+        }
     }
     
     kvCache.init(config.nLayers, config.nKVHeads, config.headDim, config.contextLength);
@@ -538,17 +662,41 @@ std::string LlamaModel::detokenize(const std::vector<int32_t>& tokens) {
         if (t == bosToken || t == eosToken) continue;
         if (t < 0 || t >= (int32_t)vocabTokens.size()) continue;
         std::string piece = vocabTokens[t];
-        // GPT-2 BPE: Ġ (U+0120, bytes C4 A0 in UTF-8) means space prefix
-        // Replace Ġ with space
+        // GPT-2 byte-to-unicode reverse mapping.
+        // Bytes 0..63   -> U+0100..U+013F  (C4 80..C4 BF)
+        // Bytes 64..127 -> U+0140..U+017F  (C5 80..C5 BF)
+        // e.g. Ġ (C4 A0)=U+0120 -> byte 0x20 ' ', Ċ (C4 8A) -> '\n', ĉ (C4 89) -> '\t'
         std::string decoded;
+        decoded.reserve(piece.size());
         for (size_t i = 0; i < piece.size(); ) {
-            if ((uint8_t)piece[i] == 0xC4 && i + 1 < piece.size() && (uint8_t)piece[i+1] == 0xA0) {
-                decoded += ' ';
-                i += 2;
-            } else {
-                decoded += piece[i];
-                i++;
+            uint8_t b = (uint8_t)piece[i];
+            // GPT-2 mapped-byte range: U+0100..U+017F encodes raw bytes 0x00..0x7F
+            if ((b == 0xC4 || b == 0xC5) && i + 1 < piece.size()) {
+                uint8_t n2 = (uint8_t)piece[i + 1];
+                if (n2 >= 0x80 && n2 <= 0xBF) {
+                    int byteVal = (n2 & 0x3F) | ((b == 0xC4) ? 0x00 : 0x40);
+                    decoded += (char)byteVal;
+                    i += 2;
+                    continue;
+                }
             }
+            // genuine 2/3/4-byte UTF-8 passes through unchanged
+            int extra = 0;
+            if ((b & 0xE0) == 0xC0) extra = 1;
+            else if ((b & 0xF0) == 0xE0) extra = 2;
+            else if ((b & 0xF8) == 0xF0) extra = 3;
+            if (extra > 0 && i + extra < piece.size()) {
+                bool valid = true;
+                for (int k = 1; k <= extra; k++)
+                    if (((uint8_t)piece[i + k] & 0xC0) != 0x80) { valid = false; break; }
+                if (valid) {
+                    decoded.append(piece, i, extra + 1);
+                    i += extra + 1;
+                    continue;
+                }
+            }
+            decoded += piece[i];
+            i++;
         }
         result += decoded;
     }
@@ -559,13 +707,115 @@ std::string LlamaModel::detokenize(const std::vector<int32_t>& tokens) {
 // LLaMA Forward Pass
 // ============================================================================
 
+namespace {
+
+// Persistent worker pool for matmul: inference calls matmul dozens of times
+// per token, and spawning threads per call costs more than the work itself.
+class MatmulPool {
+public:
+    static MatmulPool& instance() {
+        static MatmulPool pool;
+        return pool;
+    }
+
+    // Split [0, total) into at most nChunks ranges, run fn(lo, hi) on them.
+    void run(int total, int nChunks, const std::function<void(int, int)>& fn) {
+        if (nChunks <= 1) { fn(0, total); return; }
+        int chunk = (total + nChunks - 1) / nChunks;
+        std::unique_lock<std::mutex> lk(mu_);
+        fn_ = &fn;
+        total_ = total;
+        chunk_ = chunk;
+        nChunks_ = nChunks;
+        next_.store(0, std::memory_order_relaxed);
+        busy_ = (int)workers_.size();
+        ++generation_;
+        lk.unlock();
+        cv_.notify_all();
+
+        drain();   // calling thread participates
+
+        lk.lock();
+        doneCv_.wait(lk, [&] { return busy_ == 0; });
+        fn_ = nullptr;
+    }
+
+private:
+    MatmulPool() {
+        unsigned hw = std::thread::hardware_concurrency();
+        int nt = (int)std::max(2u, std::min(hw ? hw : 2u, 8u)) - 1;
+        for (int i = 0; i < nt; ++i)
+            workers_.emplace_back([this] { workerLoop(); });
+    }
+
+    ~MatmulPool() {
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            stop_ = true;
+            ++generation_;
+        }
+        cv_.notify_all();
+        for (auto& t : workers_) t.join();
+    }
+
+    void drain() {
+        int total = total_, chunk = chunk_, n = nChunks_;
+        for (;;) {
+            int idx = next_.fetch_add(1, std::memory_order_relaxed);
+            if (idx >= n) return;
+            int lo = idx * chunk;
+            int hi = std::min(total, lo + chunk);
+            if (lo < hi) (*fn_)(lo, hi);
+        }
+    }
+
+    void workerLoop() {
+        uint64_t seen = 0;
+        for (;;) {
+            std::unique_lock<std::mutex> lk(mu_);
+            cv_.wait(lk, [&] { return stop_ || generation_ != seen; });
+            if (stop_) return;
+            seen = generation_;
+            lk.unlock();
+            drain();
+            lk.lock();
+            if (--busy_ == 0) doneCv_.notify_one();
+        }
+    }
+
+    std::mutex mu_;
+    std::condition_variable cv_, doneCv_;
+    std::vector<std::thread> workers_;
+    const std::function<void(int, int)>* fn_ = nullptr;
+    int total_ = 0, chunk_ = 0, nChunks_ = 0, busy_ = 0;
+    std::atomic<int> next_{0};
+    uint64_t generation_ = 0;
+    bool stop_ = false;
+};
+
+} // anonymous namespace
+
 void LlamaModel::matmul(const float* input, const LlamaTensor& weight, float* output, int inDim, int outDim) {
     const float* w = weight.as_float();
-    for (int o = 0; o < outDim; o++) {
-        float sum = 0;
-        for (int i = 0; i < inDim; i++) sum += input[i] * w[o * inDim + i];
-        output[o] = sum;
-    }
+    if (!w) return;
+
+    auto rowWork = [&](int o0, int o1) {
+        for (int o = o0; o < o1; o++) {
+            float sum = 0;
+            const float* wr = w + (size_t)o * inDim;
+            for (int i = 0; i < inDim; i++) sum += input[i] * wr[i];
+            output[o] = sum;
+        }
+    };
+
+    // small matmuls stay single-threaded (thread overhead would dominate)
+    size_t work = (size_t)outDim * (size_t)inDim;
+    if (work < (size_t)256 * 1024) { rowWork(0, outDim); return; }
+
+    unsigned hw = std::thread::hardware_concurrency();
+    int nt = std::max(2u, std::min(hw ? hw : 2u, 8u));
+    if (nt > outDim) nt = outDim;
+    MatmulPool::instance().run(outDim, nt, rowWork);
 }
 
 std::vector<float> LlamaModel::rmsNorm(const float* x, const LlamaTensor& weight, int dim) {
@@ -718,11 +968,24 @@ int32_t LlamaModel::sampleNext(const float* logits, float temperature, int topK,
     }
     
     if (topP < 1.0f) {
+        // standard top-p: keep the smallest set of tokens whose cumulative
+        // probability reaches topP, zero out the rest
         std::vector<std::pair<float, int>> sorted;
         for (int i = 0; i < V; i++) if (probs[i] > 0) sorted.emplace_back(probs[i], i);
         std::sort(sorted.begin(), sorted.end(), [](auto& a, auto& b) { return a.first > b.first; });
         float cum = 0;
-        for (auto& p : sorted) { cum += p.first; if (cum > topP) probs[p.second] = 0; }
+        for (auto& p : sorted) {
+            cum += p.first;
+            if (cum >= topP) break;      // this token is the last one kept
+        }
+        // re-walk and keep only tokens up to and including the cutoff
+        float cum2 = 0;
+        bool cutoffPassed = false;
+        for (auto& p : sorted) {
+            if (cutoffPassed) probs[p.second] = 0;
+            cum2 += p.first;
+            if (!cutoffPassed && cum2 >= topP) cutoffPassed = true;
+        }
     }
     
     float sum = 0;
@@ -750,16 +1013,24 @@ std::vector<int32_t> LlamaModel::generate(const std::vector<int32_t>& prompt, in
         kvCache.pos++;
     }
     
-    std::vector<int32_t> result = prompt;
-    
+    std::vector<int32_t> result;
+    result.reserve(maxTokens);
+
+    int effectiveEos = eosToken;
+
     for (int step = 0; step < maxTokens; step++) {
         int32_t next = sampleNext(logits.data(), temperature, topK, topP);
-        if (next == eosToken || next == 0) break;
+        if (next < 0 || next >= config.vocabSize) break;
+        if (next == effectiveEos) break;
+        // token 0 is only a stop condition when it really is the EOS/unk id;
+        // otherwise treat it as a normal token
+        if (next == 0 && eosToken == 0) break;
         result.push_back(next);
         logits = forward(next, kvCache.pos);
         kvCache.pos++;
     }
-    
+
+    // NOTE: returns ONLY newly generated tokens (callers detokenize these).
     return result;
 }
 

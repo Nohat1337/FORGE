@@ -58,6 +58,7 @@ set(COMMON_SOURCES
     src/fvm/runtime.cpp
     src/fvm/classfile.cpp
     src/fvm/sdl2_ui.cpp
+    src/fvm/gui_kit.cpp
     src/fvm/sdl_fvm_ui.cpp
     src/fvm/forge_ide.cpp
     src/fvm/ffi.cpp
@@ -68,6 +69,8 @@ set(COMMON_SOURCES
     src/fvm/forge_compute.cpp
     src/fvm/hf_converter.cpp
     src/pkg_manager.cpp
+    src/java_backend.cpp
+    src/lib_cmd.cpp
 )
 
 # Main forge interpreter (direct .fge execution) - uses FVM

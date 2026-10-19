@@ -13,6 +13,31 @@ static uint16_t readU16(const uint8_t* p) { return (uint16_t)(p[0] << 8 | p[1]);
 static uint32_t readU32(const uint8_t* p) {
     return (uint32_t)(p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]);
 }
+
+// Bounds-checked readers: return false and leave *out untouched on overflow.
+// All parsing of untrusted .fclass data MUST go through these.
+static inline bool hasBytes(const uint8_t* p, const uint8_t* end, size_t n) {
+    return p <= end && n <= (size_t)(end - p);
+}
+static bool readU8c(const uint8_t*& p, const uint8_t* end, uint8_t& out) {
+    if (!hasBytes(p, end, 1)) return false;
+    out = *p++; return true;
+}
+static bool readU16c(const uint8_t*& p, const uint8_t* end, uint16_t& out) {
+    if (!hasBytes(p, end, 2)) return false;
+    out = (uint16_t)(p[0] << 8 | p[1]); p += 2; return true;
+}
+static bool readU32c(const uint8_t*& p, const uint8_t* end, uint32_t& out) {
+    if (!hasBytes(p, end, 4)) return false;
+    out = readU32(p); p += 4; return true;
+}
+static bool assignBytes(std::vector<uint8_t>& dst, const uint8_t*& p,
+                        const uint8_t* end, size_t n) {
+    if (!hasBytes(p, end, n)) return false;
+    dst.assign(p, p + n);
+    p += n;
+    return true;
+}
 static int32_t readI32(const uint8_t* p) { return (int32_t)readU32(p); }
 static float readF32(const uint8_t* p) { float v; std::memcpy(&v, p, 4); return v; }
 static int64_t readI64(const uint8_t* p) {
@@ -154,36 +179,34 @@ bool ClassFile::load(const uint8_t* data, size_t len) {
 
         switch (tag) {
             case CPTag::UTF8: {
-                uint16_t slen = readU16(p); p += 2;
-                if (p + slen > end) return false;
-                constantPool[i].data.assign(p, p + slen);
-                p += slen;
+                uint16_t slen;
+                if (!readU16c(p, end, slen)) return false;
+                if (!assignBytes(constantPool[i].data, p, end, slen)) return false;
                 break;
             }
             case CPTag::INTEGER:
             case CPTag::FLOAT:
-                constantPool[i].data.assign(p, p + 4); p += 4;
+                if (!assignBytes(constantPool[i].data, p, end, 4)) return false;
                 break;
             case CPTag::LONG:
             case CPTag::DOUBLE:
-                constantPool[i].data.assign(p, p + 8); p += 8;
+                if (!assignBytes(constantPool[i].data, p, end, 8)) return false;
                 break;
             case CPTag::BOOLEAN:
-                constantPool[i].data.assign(p, p + 1); p += 1;
+                if (!assignBytes(constantPool[i].data, p, end, 1)) return false;
                 break;
             case CPTag::CLASS:
             case CPTag::STRING:
-                constantPool[i].data.assign(p, p + 2); p += 2;
+                if (!assignBytes(constantPool[i].data, p, end, 2)) return false;
                 break;
             case CPTag::METHODREF:
             case CPTag::NAME_AND_TYPE:
             case CPTag::FORGE_PROPERTY:
-                constantPool[i].data.assign(p, p + 4); p += 4;
+                if (!assignBytes(constantPool[i].data, p, end, 4)) return false;
                 break;
             case CPTag::FORGE_METHOD: {
                 // 2-byte method index (big-endian)
-                if (p + 2 > end) return false;
-                constantPool[i].data.assign(p, p + 2); p += 2;
+                if (!assignBytes(constantPool[i].data, p, end, 2)) return false;
                 break;
             }
             default:
@@ -204,36 +227,39 @@ bool ClassFile::load(const uint8_t* data, size_t len) {
     superClass = readU16(p); p += 2;
 
     // Interfaces
-    uint16_t ifaceCount = readU16(p); p += 2;
+    uint16_t ifaceCount;
+    if (!readU16c(p, end, ifaceCount)) return false;
     interfaces.clear();
     for (uint16_t i = 0; i < ifaceCount; i++) {
-        if (p + 2 > end) return false;
-        interfaces.push_back(readU16(p)); p += 2;
+        uint16_t idx;
+        if (!readU16c(p, end, idx)) return false;
+        interfaces.push_back(idx);
     }
 
     // Helper to read member info (fields/methods)
     auto readMembers = [&](std::vector<FieldInfo>& members) -> bool {
-        uint16_t count = readU16(p); p += 2;
+        uint16_t count;
+        if (!readU16c(p, end, count)) return false;
         members.clear();
         members.resize(count);
         for (uint16_t i = 0; i < count; i++) {
-            if (p + 8 > end) return false;
+            if (!hasBytes(p, end, 8)) return false;
             members[i].accessFlags = readU16(p); p += 2;
             members[i].nameIndex = readU16(p); p += 2;
             members[i].descriptorIndex = readU16(p); p += 2;
             uint16_t attrCount = readU16(p); p += 2;
             members[i].attributes.resize(attrCount);
             for (uint16_t j = 0; j < attrCount; j++) {
-                if (p + 2 > end) return false;
+                if (!hasBytes(p, end, 2)) return false;
                 uint16_t nameIdx = readU16(p); p += 2;
                 members[i].attributes[j].nameIndex = nameIdx;
                 std::string attrName = getUtf8(nameIdx);
                 if (attrName == "Code") members[i].attributes[j].type = AttributeInfo::Type::CODE;
                 else if (attrName == "SourceFile") members[i].attributes[j].type = AttributeInfo::Type::SOURCE_FILE;
 
-                if (p + 4 > end) return false;
-                uint32_t attrLen = readU32(p); p += 4;
-                if (p + attrLen > end) return false;
+                uint32_t attrLen;
+                if (!readU32c(p, end, attrLen)) return false;
+                if (!hasBytes(p, end, attrLen)) return false;
                 members[i].attributes[j].data.assign(p, p + attrLen);
                 p += attrLen;
             }
@@ -249,33 +275,41 @@ bool ClassFile::load(const uint8_t* data, size_t len) {
     methods.clear();
     methods.resize(methodCount);
     for (uint16_t i = 0; i < methodCount; i++) {
-        if (p + 8 > end) return false;
+        if (!hasBytes(p, end, 8)) return false;
         methods[i].accessFlags = readU16(p); p += 2;
         methods[i].nameIndex = readU16(p); p += 2;
         methods[i].descriptorIndex = readU16(p); p += 2;
         uint16_t attrCount = readU16(p); p += 2;
         methods[i].attributes.resize(attrCount);
         for (uint16_t j = 0; j < attrCount; j++) {
-            if (p + 2 > end) return false;
+            if (!hasBytes(p, end, 2)) return false;
             uint16_t nameIdx = readU16(p); p += 2;
             methods[i].attributes[j].nameIndex = nameIdx;
             std::string attrName = getUtf8(nameIdx);
 
-            if (p + 4 > end) return false;
-            uint32_t attrLen = readU32(p); p += 4;
-            if (p + attrLen > end) return false;
+            uint32_t attrLen;
+            if (!readU32c(p, end, attrLen)) return false;
+            if (!hasBytes(p, end, attrLen)) return false;
+            const uint8_t* attrEnd = p + attrLen;
 
             if (attrName == "Code") {
                 methods[i].attributes[j].type = AttributeInfo::Type::CODE;
                 const uint8_t* cp = p;
+                // Header: maxStack, maxLocals, arity, upvalueCount
+                if (!hasBytes(cp, attrEnd, 8)) return false;
                 methods[i].maxStack = readU16(cp); cp += 2;
                 methods[i].maxLocals = readU16(cp); cp += 2;
                 methods[i].arity = readU16(cp); cp += 2;
                 methods[i].upvalueCount = readU16(cp); cp += 2;
-                uint32_t codeLen = readU32(cp); cp += 4;
+                uint32_t codeLen;
+                if (!readU32c(cp, attrEnd, codeLen)) return false;
+                if (!hasBytes(cp, attrEnd, codeLen)) return false;
                 methods[i].bytecode.assign(cp, cp + codeLen);
                 cp += codeLen;
-                uint16_t exCount = readU16(cp); cp += 2;
+                uint16_t exCount;
+                if (!readU16c(cp, attrEnd, exCount)) return false;
+                // Each exception-table entry is 8 bytes
+                if (!hasBytes(cp, attrEnd, (size_t)exCount * 8)) return false;
                 methods[i].exceptionTable.resize(exCount);
                 for (uint16_t e = 0; e < exCount; e++) {
                     methods[i].exceptionTable[e].startPc = readU16(cp); cp += 2;
@@ -284,11 +318,12 @@ bool ClassFile::load(const uint8_t* data, size_t len) {
                     methods[i].exceptionTable[e].catchType = readU16(cp); cp += 2;
                 }
                 // Read FVM extension fields if present
-                const uint8_t* attrEnd = p + attrLen;
-                if (cp + 4 <= attrEnd) {
+                if (hasBytes(cp, attrEnd, 4)) {
                     methods[i].constantPoolOffset = readU16(cp); cp += 2;
                     methods[i].constantPoolCount = readU16(cp); cp += 2;
                 }
+                // Extension fields are optional but must not exceed the attribute
+                if (cp != attrEnd && !hasBytes(cp, attrEnd, 1)) return false;
             } else if (attrName == "SourceFile") {
                 methods[i].attributes[j].type = AttributeInfo::Type::SOURCE_FILE;
             } else {
@@ -296,7 +331,7 @@ bool ClassFile::load(const uint8_t* data, size_t len) {
             }
 
             methods[i].attributes[j].data.assign(p, p + attrLen);
-            p += attrLen;
+            p = attrEnd;
         }
     }
 
@@ -306,12 +341,12 @@ bool ClassFile::load(const uint8_t* data, size_t len) {
     attributes.clear();
     attributes.resize(classAttrCount);
     for (uint16_t i = 0; i < classAttrCount; i++) {
-        if (p + 2 > end) return false;
+        if (!hasBytes(p, end, 2)) return false;
         uint16_t nameIdx = readU16(p); p += 2;
         attributes[i].nameIndex = nameIdx;
-        if (p + 4 > end) return false;
-        uint32_t attrLen = readU32(p); p += 4;
-        if (p + attrLen > end) return false;
+        uint32_t attrLen;
+        if (!readU32c(p, end, attrLen)) return false;
+        if (!hasBytes(p, end, attrLen)) return false;
         attributes[i].data.assign(p, p + attrLen);
         p += attrLen;
     }
