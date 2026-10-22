@@ -58,6 +58,7 @@ set(COMMON_SOURCES
     src/fvm/runtime.cpp
     src/fvm/classfile.cpp
     src/fvm/sdl2_ui.cpp
+    src/fvm/liquid_glass.cpp
     src/fvm/gui_kit.cpp
     src/fvm/sdl_fvm_ui.cpp
     src/fvm/forge_ide.cpp
@@ -71,7 +72,32 @@ set(COMMON_SOURCES
     src/pkg_manager.cpp
     src/java_backend.cpp
     src/lib_cmd.cpp
+    src/android_cmd.cpp
 )
+
+# Embed the Android project scaffold (gradle/manifest/java templates)
+# into the binary so `forgevm android new` needs no external assets.
+set(ANDROID_TPL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/android_templates)
+file(GLOB ANDROID_TPL_FILES
+    ${ANDROID_TPL_DIR}/*.java
+    ${ANDROID_TPL_DIR}/*.kt
+    ${ANDROID_TPL_DIR}/*.xml
+    ${ANDROID_TPL_DIR}/*.kts
+    ${ANDROID_TPL_DIR}/*.properties
+    ${ANDROID_TPL_DIR}/res/values/*.xml)
+foreach(_f ${ANDROID_TPL_FILES})
+    file(READ ${_f} _content)
+    get_filename_component(_base ${_f} NAME)
+    string(MAKE_C_IDENTIFIER ${_base} _ident)
+    set(ANDROID_TPL_${_ident} "${_content}")
+    # re-run configure when a template changes so the embedded copy stays fresh
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_f})
+endforeach()
+configure_file(src/android_templates.h.in
+    ${CMAKE_BINARY_DIR}/generated/android_templates.h @ONLY)
+set_property(SOURCE src/android_cmd.cpp APPEND PROPERTY
+    OBJECT_DEPENDS ${CMAKE_BINARY_DIR}/generated/android_templates.h)
+include_directories(${CMAKE_BINARY_DIR}/generated)
 
 # Main forge interpreter (direct .fge execution) - uses FVM
 add_executable(forge

@@ -1,4 +1,5 @@
 #include "java_backend.hpp"
+#include "android_templates.h"
 #include "ast.hpp"
 #include "lexer.hpp"
 #include "parser.hpp"
@@ -688,9 +689,14 @@ R"JAVA(    // ================= Forge Runtime (R) =================
 
     // generate statement list; `depth` = indent level (in units of 4 spaces)
     void genStmts(std::ostringstream& o, const std::vector<StmtPtr>& stmts, int depth) {
+        // nested statements are never script top-level: a `let` inside a
+        // block or loop is a local (R.Cell), not a static field
+        bool savedTop = scriptTopLevel_;
+        scriptTopLevel_ = false;
         scopes_.push_back({});
         for (auto& s : stmts) genStmt(o, s, depth);
         scopes_.pop_back();
+        scriptTopLevel_ = savedTop;
     }
 
     void genStmt(std::ostringstream& o, const StmtPtr& s, int depth) {
@@ -840,7 +846,10 @@ R"JAVA(    // ================= Forge Runtime (R) =================
     }
 
     void genStmtsNoScope(std::ostringstream& o, const std::vector<StmtPtr>& stmts, int depth) {
+        bool savedTop = scriptTopLevel_;
+        scriptTopLevel_ = false;
         for (auto& s : stmts) genStmt(o, s, depth);
+        scriptTopLevel_ = savedTop;
     }
 
     // ---------------- expressions ----------------
@@ -893,6 +902,18 @@ R"JAVA(    // ================= Forge Runtime (R) =================
             if (fn == "cwd") return "(a) -> java.nio.file.Paths.get(\"\").toAbsolutePath().toString()";
         } else if (mod == "system") {
             if (fn == "version") return "(a) -> R.systemVersion(a)";
+        } else if (mod == "gui") {
+            // the gui module is implemented by the host: ForgeGui (Android,
+            // backed by the liquid glass library) or a no-op stub on the JVM.
+            static const char* kGuiFns[] = {
+                "window", "button", "label", "textfield", "checkbox", "progress",
+                "panel", "slider", "gauge", "toggle", "radio", "tabs", "list",
+                "combo", "set_text", "get_text", "set_checked", "set_progress",
+                "set_value", "get_value", "set_items", "select", "get_selected",
+                "close", "tick", "poll", "screenshot",
+            };
+            for (const char* g : kGuiFns)
+                if (fn == g) return "(a) -> ForgeGui." + fn + "(a)";
         }
         return "";
     }
@@ -1036,11 +1057,11 @@ R"JAVA(    // ================= Forge Runtime (R) =================
             if (auto* me = std::get_if<MemberExpr>(&x->callee->node)) {
                 // method call: obj.member(args)
                 if (auto* baseId = std::get_if<Identifier>(&me->object->node)) {
-                    // module-qualified builtin? io.read(...) etc.
-                    bool isImport = false;
-                    for (auto& [al, mod] : imports_)
-                        if ((al.empty() && baseId->name == mod) || al == baseId->name) isImport = true;
-                    if (!isImport && !globalVars_.count(baseId->name) &&
+                    // module-qualified builtin? io.read(...), gui.button(...) etc.
+                    // The module name may come from `import "x"` (the alias is the
+                    // module name) - known modules are mapped to their runtime
+                    // helper, unknown names fall through to a normal method call.
+                    if (!globalVars_.count(baseId->name) &&
                         !classNames_.count(baseId->name) && !isLocal(baseId->name)) {
                         std::string mb = moduleBuiltin(baseId->name, me->member);
                         if (!mb.empty())
@@ -1297,6 +1318,15 @@ int java_main(int argc, char** argv) {
         }
         std::cout << "Transpiled " << srcFile << " -> " << javaFile.string() << "\n";
 
+        // programs that use the `gui` module need the no-op desktop stub
+        fs::path stubFile;
+        bool needsGuiStub = javaSrc.find("ForgeGui.") != std::string::npos;
+        if (needsGuiStub) {
+            stubFile = buildDir / "ForgeGui.java";
+            std::ofstream sf(stubFile);
+            sf << forge::androidcmd::TPL_ForgeGuiStub_java;
+        }
+
         // locate JDK tools
         auto findTool = [](const char* tool) -> std::string {
             std::string home = std::getenv("JAVA_HOME") ? std::getenv("JAVA_HOME") : "";
@@ -1322,6 +1352,7 @@ int java_main(int argc, char** argv) {
         }
 
         std::string compileCmd = shellQuote(javac) + " -Xlint:-options " + shellQuote(javaFile.string());
+        if (needsGuiStub) compileCmd += " " + shellQuote(stubFile.string());
         int rc = std::system(compileCmd.c_str());
         if (rc != 0) {
             std::cerr << "Error: javac failed\n";
@@ -1353,6 +1384,7 @@ int java_main(int argc, char** argv) {
             std::error_code ec;
             fs::remove(javaFile, ec);
             fs::remove(manifest, ec);
+            if (needsGuiStub) fs::remove(stubFile, ec);
             for (auto& entry : fs::directory_iterator(buildDir))
                 if (entry.path().extension() == ".class") fs::remove(entry.path(), ec);
         }

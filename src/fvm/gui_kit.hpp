@@ -5,6 +5,11 @@
 // Swing/AWT on the JVM).
 //
 // Retained widget tree rendered with SDL2 through SDL2UI.
+// Every widget is drawn with the liquid glass lens renderer
+// (see liquid_glass.hpp): the widget is a real SDF lens that
+// refracts the backdrop, disperses the rim into RGB fringes and
+// carries a specular highlight.
+//
 // Because the interpreter is not re-entrant, callbacks are
 // delivered as an event queue consumed from Forge:
 //
@@ -30,20 +35,34 @@ namespace forge::fvm {
 struct GuiEvent {
     long long windowId = 0;
     long long widgetId = 0;
-    std::string type;      // "click", "check", "text", "close", "key"
+    std::string type;      // "click", "check", "text", "close", "change", "select"
     std::string text;
 };
 
 struct GuiWidget {
     long long id = 0;
-    std::string kind;          // button label textfield checkbox progress panel
+    std::string kind;      // button label textfield checkbox progress panel
+                             // slider gauge toggle radio tabs list combo
     int x = 0, y = 0, w = 0, h = 0;
     std::string text;
     bool checked = false;
     bool hovered = false;
     bool pressed = false;
-    double value = 0;          // progress 0..1
+    double value = 0;          // slider / gauge / progress: 0..1
+    double minV = 0, maxV = 1;
     uint8_t bgR = 60, bgG = 62, bgB = 70;
+
+    // liquid glass animation state
+    double anim = 0;           // eased value (0..1)
+    double animCheck = 0;      // eased checked state
+    double pressAnim = 0;      // eased press amount
+    double glow = 0;           // eased hover glow
+
+    // selection widgets
+    int selected = -1;
+    bool open = false;         // combo dropdown open
+    std::vector<std::string> items;
+    std::string group;         // radio group name
     std::vector<GuiWidget> children;
 };
 
@@ -82,8 +101,6 @@ private:
     struct Impl;
     Impl* impl_ = nullptr;
 
-    void renderWindow(GuiWindow& win);
-    void renderWidget(GuiWindow& win, GuiWidget& w);
 };
 
 void defineGuiModule(ForgeVM& vm);

@@ -6,6 +6,7 @@
 #include "forge_build.hpp"
 #include "java_backend.hpp"
 #include "lib_cmd.hpp"
+#include "android_cmd.hpp"
 #include "compiler.hpp"
 #include "lexer.hpp"
 #include "parser.hpp"
@@ -83,6 +84,7 @@ int main(int argc, char* argv[]) {
             std::cout << "  compile <f> [o]  Compile .fge to .fclass bytecode\n";
             std::cout << "  java <f> [opts]  Transpile .fge to Java / build a runnable .jar\n";
             std::cout << "  lib new|build    Native library scaffolding (C ABI / ffi)\n";
+            std::cout << "  android <cmd>    Build Android apps (new|build|install|run)\n";
             std::cout << "  pkg <cmd>        Package manager commands\n";
             std::cout << "  build            Build project from ForgeLists.txt\n";
             std::cout << "  --sdl, gui       Launch the SDL2 windowed UI for the FVM\n";
@@ -110,6 +112,10 @@ int main(int argc, char* argv[]) {
             int libArgc = argc - i;
             char** libArgv = argv + i;
             return forge::libcmd::lib_main(libArgc, libArgv);
+        } else if (arg == "android") {
+            int andArgc = argc - i;
+            char** andArgv = argv + i;
+            return forge::androidcmd::android_main(andArgc, andArgv);
         } else if (arg == "build") {
             int buildArgc = argc - i - 1;
             char** buildArgv = argv + i + 1;

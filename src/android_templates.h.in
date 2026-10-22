@@ -1,0 +1,36 @@
+#pragma once
+// ============================================================
+// Generated from src/android_templates/* - do not edit.
+//
+// The Android project scaffold (gradle files, manifest, resources
+// and the java sources of the liquid glass GUI runtime) is embedded
+// into the binary so `forgevm android new` works from a single
+// executable, with no external assets.
+// ============================================================
+
+namespace forge {
+namespace androidcmd {
+
+inline const char* TPL_settings_gradle_kts = R"JAVA(@ANDROID_TPL_settings_gradle_kts@)JAVA";
+inline const char* TPL_build_gradle_kts = R"JAVA(@ANDROID_TPL_build_gradle_kts@)JAVA";
+inline const char* TPL_app_build_gradle_kts = R"JAVA(@ANDROID_TPL_app_build_gradle_kts@)JAVA";
+inline const char* TPL_gradle_properties = R"JAVA(@ANDROID_TPL_gradle_properties@)JAVA";
+inline const char* TPL_AndroidManifest = R"JAVA(@ANDROID_TPL_AndroidManifest_xml@)JAVA";
+inline const char* TPL_strings_xml = R"JAVA(@ANDROID_TPL_strings_xml@)JAVA";
+inline const char* TPL_colors_xml = R"JAVA(@ANDROID_TPL_colors_xml@)JAVA";
+inline const char* TPL_themes_xml = R"JAVA(@ANDROID_TPL_themes_xml@)JAVA";
+inline const char* TPL_ForgeGui_kt = R"JAVA(@ANDROID_TPL_ForgeGui_kt@)JAVA";
+inline const char* TPL_MainActivity_kt = R"JAVA(@ANDROID_TPL_MainActivity_kt@)JAVA";
+inline const char* TPL_ForgeWallpaper_kt = R"JAVA(@ANDROID_TPL_ForgeWallpaper_kt@)JAVA";
+inline const char* TPL_LiquidButton_kt = R"JAVA(@ANDROID_TPL_LiquidButton_kt@)JAVA";
+inline const char* TPL_LiquidToggle_kt = R"JAVA(@ANDROID_TPL_LiquidToggle_kt@)JAVA";
+inline const char* TPL_LiquidSlider_kt = R"JAVA(@ANDROID_TPL_LiquidSlider_kt@)JAVA";
+inline const char* TPL_LiquidBottomTabs_kt = R"JAVA(@ANDROID_TPL_LiquidBottomTabs_kt@)JAVA";
+inline const char* TPL_LiquidBottomTab_kt = R"JAVA(@ANDROID_TPL_LiquidBottomTab_kt@)JAVA";
+inline const char* TPL_LiquidHighlight_kt = R"JAVA(@ANDROID_TPL_LiquidHighlight_kt@)JAVA";
+inline const char* TPL_LiquidDampedDrag_kt = R"JAVA(@ANDROID_TPL_LiquidDampedDrag_kt@)JAVA";
+inline const char* TPL_LiquidDragInspector_kt = R"JAVA(@ANDROID_TPL_LiquidDragInspector_kt@)JAVA";
+inline const char* TPL_ForgeGuiStub_java = R"JAVA(@ANDROID_TPL_ForgeGuiStub_java@)JAVA";
+
+} // namespace androidcmd
+} // namespace forge
