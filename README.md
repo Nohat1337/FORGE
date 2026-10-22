@@ -38,12 +38,13 @@
 | **Compute Module** | Cross-platform GPU compute (HIP/ROCm, CUDA, SYCL) via `import "compute"` |
 | **Cross-Platform** | Linux (all distros), Windows, macOS |
 | **BUILT-IN ANDROID SDK** |  the real android sdk wrapped with gradle contains some templates to start and fully compatible to work with 
-*note* 
-:: {must be preinstalled GRADLE before using our language to compose your project}
-:: {the built-in android feature estimated only for sdk's of (35-36-37) most likely the newer version that supports blur effect's (**advanced textures**)}
-:: {wrapped android templates that sticks to your project contains a basic liquid glass effect for SDK 36-37 (buttons,toggles,sliders,bottom tabs) with tinting support}
-:: **i taken some liquid glass files from creatator KYANT0 of his repository https://github.com/Kyant0/AndroidLiquidGlass**  
 ---
+*note* 
+:: [must be preinstalled GRADLE before using our language to compose your project]
+:: [the built-in android feature estimated only for sdk's of (35-36-37) most likely the newer version that supports blur effect's (**advanced textures**)]
+:: [wrapped android templates that sticks to your project contains a basic liquid glass effect for SDK 36-37 (buttons,toggles,sliders,bottom tabs) with tinting support]
+:: **i taken some liquid glass files from creatator KYANT0 of his repository https://github.com/Kyant0/AndroidLiquidGlass**  
+
 
 ## Installation
 
