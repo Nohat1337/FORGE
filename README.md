@@ -37,7 +37,12 @@
 | **Tools** | Formatter, linter, debugger included |
 | **Compute Module** | Cross-platform GPU compute (HIP/ROCm, CUDA, SYCL) via `import "compute"` |
 | **Cross-Platform** | Linux (all distros), Windows, macOS |
-
+| **BUILT-IN ANDROID SDK** |  the real android sdk wrapped with gradle contains some templates to start and fully compatible to work with 
+*note* 
+:: {must be preinstalled GRADLE before using our language to compose your project}
+:: {the built-in android feature estimated only for sdk's of (35-36-37) most likely the newer version that supports blur effect's (**advanced textures**)}
+:: {wrapped android templates that sticks to your project contains a basic liquid glass effect for SDK 36-37 (buttons,toggles,sliders,bottom tabs) with tinting support}
+:: **i taken some liquid glass files from creatator KYANT0 of his repository https://github.com/Kyant0/AndroidLiquidGlass**  
 ---
 
 ## Installation
@@ -492,16 +497,16 @@ forgevm --ide                # Same via forgevm
                        ▼
 ┌─────────────────────────────────────────────────────────┐
 │              Stack-Based Virtual Machine                │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐              │
-│  │  Stack   │  │  Frames  │  │  Globals │              │
-│  └──────────┘  └──────────┘  └──────────┘              │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐               │
+│  │  Stack   │  │  Frames  │  │  Globals │               │
+│  └──────────┘  └──────────┘  └──────────┘               │
 └──────────────────────┬──────────────────────────────────┘
                        ▼
 ┌─────────────────────────────────────────────────────────┐
 │        .fclass Bytecode ──► forgevm loader              │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐              │
-│  │  CP      │  │ Methods  │  │  Code    │              │
-│  └──────────┘  └──────────┘  └──────────┘              │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐               │
+│  │  CP      │  │ Methods  │  │  Code    │               │
+│  └──────────┘  └──────────┘  └──────────┘               │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -560,10 +565,10 @@ forge/
 - [x] **SDL2 IDE** — Full graphical IDE (editor, REPL, file browser)
 - [x] **Package Manager** — `forge pkg` with community registry
 - [x] **Compile & Run** — `forgevm compile` + `forgevm <file.fclass>`
-- [ ] **JIT Compiler** — LLVM backend for hot paths
-- [ ] **LSP Server** — Full IDE support (VS Code, Neovim)
-- [ ] **WASM Target** — Run Forge in browsers
-- [ ] **FFI** — Native C function calls
+- [x] **JIT Compiler** — LLVM backend for hot paths
+- [x] **LSP Server** — Full IDE support (VS Code, Neovim)
+- [x] **WASM Target** — Run Forge in browsers
+- [x] **FFI** — Native C function calls
 - [ ] **Gradual Typing** — Optional static type checking
 - [ ] **Concurrency** — Actor model / channels
 
