@@ -16,6 +16,7 @@ struct BuildConfig {
     std::string buildDir = "build";
     bool release = true;
     bool verbose = false;
+    bool shared = false;   // export as a shared library (.so) with a C ABI
 };
 
 int build_main(int argc, char* argv[]);

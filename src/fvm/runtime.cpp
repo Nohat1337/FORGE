@@ -615,6 +615,13 @@ bool ForgeVM::interpret(std::shared_ptr<GCFunction> function) {
     mainThread_.push(FValue::obj(closure));
     mainThread_.pushFrame(closure, mainThread_.stack.data(), 0);
 
+    return runLoop();
+}
+
+// The bytecode dispatch loop. Split out of interpret() so that
+// callGlobal() can invoke a Forge function from C++ using the exact same
+// interpreter (and the same error handling) as a normal script run.
+bool ForgeVM::runLoop() {
     FVMThread& thread = mainThread_;
     FVMFrame* framePtr = &thread.currentFrame();
 
@@ -1128,6 +1135,33 @@ restart:
     #undef FVM_READ_BYTE
     #undef FVM_READ_UINT16
     #undef FVM_READ_CONSTANT
+}
+
+// Calls a top-level Forge function by name from C++ (used by the exported
+// library ABI and by the FFI's reverse direction). Arguments are passed by
+// value; the result is returned through `result`.
+bool ForgeVM::callGlobal(const std::string& name, std::vector<FValue> args, FValue& result) {
+    auto it = globals_.find(name);
+    if (it == globals_.end()) {
+        runtimeError("Undefined function '" + name + "'");
+        return false;
+    }
+
+    FVMThread& thread = mainThread_;
+    thread.push(it->second);
+    for (auto& a : args) thread.push(a);
+
+    if (!thread.callValue(it->second, (int)args.size())) {
+        runtimeError("Invalid call to '" + name + "'");
+        return false;
+    }
+
+    if (!runLoop()) return false;
+
+    result = thread.stack[thread.stackTop - 1];
+    thread.stackTop = 0;
+    thread.frameCount = 0;
+    return true;
 }
 
 bool ForgeVM::interpretSource(const std::string& source, const std::string& filename) {

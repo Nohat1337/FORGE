@@ -660,6 +660,10 @@ std::vector<Diagnostic> ForgeLSP::analyzeSource(const std::string& source, const
     std::set<std::string> definedVars;
     // Add built-in function names so they aren't flagged
     for (auto& b : forgeBuiltinFunctions) definedVars.insert(b);
+    // Function parameters are in scope inside the function body
+    for (auto& sym : symbols) {
+        if (sym.kind == "parameter") definedVars.insert(sym.name);
+    }
 
     int braceDepth = 0;
     int parenDepth = 0;
@@ -1130,9 +1134,9 @@ void ForgeLSP::run() {
                 break;
             }
 
-            // Parse Content-Length
-            if (header.compare(0, 15, "Content-Length: ") == 0) {
-                contentLength = std::stoi(header.substr(15));
+            // Parse Content-Length ("Content-Length: " is 16 characters)
+            if (header.compare(0, 16, "Content-Length: ") == 0) {
+                contentLength = std::stoi(header.substr(16));
             }
         }
 
@@ -1445,8 +1449,10 @@ std::string ForgeLSP::handleCompletion(int id, const std::string& params) {
     JsonValue textDoc = p["textDocument"];
     std::string uri = textDoc.getString("uri");
 
-    int line = p.getInt("line");
-    int character = p.getInt("character");
+    // the position is nested: params.position.{line,character}
+    JsonValue posJson = p["position"];
+    int line = posJson.getInt("line");
+    int character = posJson.getInt("character");
 
     auto it = documents_.find(uri);
     if (it == documents_.end()) {
@@ -1476,8 +1482,10 @@ std::string ForgeLSP::handleHover(int id, const std::string& params) {
     JsonValue textDoc = p["textDocument"];
     std::string uri = textDoc.getString("uri");
 
-    int line = p.getInt("line");
-    int character = p.getInt("character");
+    // the position is nested: params.position.{line,character}
+    JsonValue posJson = p["position"];
+    int line = posJson.getInt("line");
+    int character = posJson.getInt("character");
 
     auto it = documents_.find(uri);
     if (it == documents_.end()) {
@@ -1515,8 +1523,10 @@ std::string ForgeLSP::handleDefinition(int id, const std::string& params) {
     JsonValue textDoc = p["textDocument"];
     std::string uri = textDoc.getString("uri");
 
-    int line = p.getInt("line");
-    int character = p.getInt("character");
+    // the position is nested: params.position.{line,character}
+    JsonValue posJson = p["position"];
+    int line = posJson.getInt("line");
+    int character = posJson.getInt("character");
 
     auto it = documents_.find(uri);
     if (it == documents_.end()) {
@@ -1556,8 +1566,10 @@ std::string ForgeLSP::handleReferences(int id, const std::string& params) {
     JsonValue textDoc = p["textDocument"];
     std::string uri = textDoc.getString("uri");
 
-    int line = p.getInt("line");
-    int character = p.getInt("character");
+    // the position is nested: params.position.{line,character}
+    JsonValue posJson = p["position"];
+    int line = posJson.getInt("line");
+    int character = posJson.getInt("character");
 
     auto it = documents_.find(uri);
     if (it == documents_.end()) {

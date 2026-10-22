@@ -28,7 +28,7 @@ CMAKE_BUILD_TYPE:STRING=Release
 CMAKE_COLOR_MAKEFILE:BOOL=ON
 
 //CXX compiler
-CMAKE_CXX_COMPILER:FILEPATH=/usr/bin/c++
+CMAKE_CXX_COMPILER:STRING=/usr/bin/c++
 
 //A wrapper around 'ar' adding the appropriate '--plugin' option
 // for the GCC compiler
@@ -210,6 +210,21 @@ CMAKE_TAPI:FILEPATH=CMAKE_TAPI-NOTFOUND
 // Studio IDE projects all commands are done without /nologo.
 CMAKE_VERBOSE_MAKEFILE:BOOL=FALSE
 
+//Build for WebAssembly (Emscripten)
+FORGE_WASM:BOOL=OFF
+
+//Enable NVIDIA CUDA support
+FORGE_WITH_CUDA:BOOL=OFF
+
+//Enable LLVM JIT compiler
+FORGE_WITH_LLVM:BOOL=OFF
+
+//Enable Language Server Protocol
+FORGE_WITH_LSP:BOOL=ON
+
+//Enable AMD ROCm/HIP support
+FORGE_WITH_ROCM:BOOL=ON
+
 //Value Computed by CMake
 ForgeTools_BINARY_DIR:STATIC=/home/nohat1337/c++-fork/build-release/tools
 
@@ -218,6 +233,12 @@ ForgeTools_IS_TOP_LEVEL:STATIC=OFF
 
 //Value Computed by CMake
 ForgeTools_SOURCE_DIR:STATIC=/home/nohat1337/c++-fork/tools
+
+//The directory containing a CMake configuration file for HIP.
+HIP_DIR:PATH=HIP_DIR-NOTFOUND
+
+//The directory containing a CMake configuration file for SDL2.
+SDL2_DIR:PATH=/usr/lib/cmake/SDL2
 
 //Value Computed by CMake
 forge_BINARY_DIR:STATIC=/home/nohat1337/c++-fork/build-release
@@ -242,9 +263,9 @@ CMAKE_CACHEFILE_DIR:INTERNAL=/home/nohat1337/c++-fork/build-release
 //Major version of cmake used to create the current loaded cache
 CMAKE_CACHE_MAJOR_VERSION:INTERNAL=4
 //Minor version of cmake used to create the current loaded cache
-CMAKE_CACHE_MINOR_VERSION:INTERNAL=2
+CMAKE_CACHE_MINOR_VERSION:INTERNAL=3
 //Patch version of cmake used to create the current loaded cache
-CMAKE_CACHE_PATCH_VERSION:INTERNAL=3
+CMAKE_CACHE_PATCH_VERSION:INTERNAL=4
 //ADVANCED property for variable: CMAKE_COLOR_MAKEFILE
 CMAKE_COLOR_MAKEFILE-ADVANCED:INTERNAL=1
 //Path to CMake executable.

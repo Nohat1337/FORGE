@@ -122,6 +122,62 @@ target_compile_definitions(forgevm PRIVATE FVM_BUILD FORGE_ROOT_DIR="${CMAKE_SOU
 
 find_package(SDL2 REQUIRED)
 
+# ---------------------------------------------------------------------------
+# forge_core — the Forge runtime as a linkable static library.
+#
+# Everything except the CLI front-ends, so a Forge program can be linked into
+# a native binary or a shared library (forgevm build [--shared]).
+# ---------------------------------------------------------------------------
+add_library(forge_core STATIC
+    src/lexer.cpp
+    src/parser.cpp
+    src/value.cpp
+    src/chunk.cpp
+    src/compiler.cpp
+    src/optimizer.cpp
+    src/fvm/runtime.cpp
+    src/fvm/classfile.cpp
+    src/fvm/sdl2_ui.cpp
+    src/fvm/liquid_glass.cpp
+    src/fvm/gui_kit.cpp
+    src/fvm/sdl_fvm_ui.cpp
+    src/fvm/forge_ide.cpp
+    src/fvm/ffi.cpp
+    src/fvm/actors.cpp
+    src/fvm/llm.cpp
+    src/fvm/gguf_loader.cpp
+    src/fvm/faw.cpp
+    src/fvm/forge_compute.cpp
+    src/fvm/hf_converter.cpp
+    src/fvm/forge_export.cpp
+)
+
+set_target_properties(forge_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(forge_core PUBLIC src)
+target_link_libraries(forge_core PUBLIC dl pthread ${SDL2_LIBRARIES})
+target_include_directories(forge_core PUBLIC ${SDL2_INCLUDE_DIRS})
+
+# Flags used by `forgevm build` when it links a generated runner against
+# forge_core (baked in so projects build without a CMake project file).
+get_target_property(_forge_sdl2_loc SDL2::SDL2 IMPORTED_LOCATION)
+if(NOT _forge_sdl2_loc)
+    get_target_property(_forge_sdl2_loc SDL2::SDL2 IMPORTED_LOCATION_RELEASE)
+endif()
+if(_forge_sdl2_loc)
+    get_filename_component(_forge_sdl2_dir "${_forge_sdl2_loc}" DIRECTORY)
+    set(FORGE_SDL2_LINK_FLAGS "-L${_forge_sdl2_dir} -lSDL2")
+else()
+    set(FORGE_SDL2_LINK_FLAGS "-lSDL2")
+endif()
+foreach(_dir ${SDL2_INCLUDE_DIRS})
+    set(FORGE_SDL2_INCLUDE_FLAGS "${FORGE_SDL2_INCLUDE_FLAGS} -I${_dir}")
+endforeach()
+
+target_compile_definitions(forgevm PRIVATE
+    FORGE_CORE_LIB="${CMAKE_BINARY_DIR}/libforge_core.a"
+    FORGE_SDL2_LINK_FLAGS="${FORGE_SDL2_LINK_FLAGS}"
+    FORGE_SDL2_INCLUDE_FLAGS="${FORGE_SDL2_INCLUDE_FLAGS}")
+
 # Link libraries
 target_link_libraries(forge PRIVATE dl ${SDL2_LIBRARIES})
 target_link_libraries(forgevm PRIVATE dl pthread ${SDL2_LIBRARIES})
@@ -165,6 +221,7 @@ add_subdirectory(tools)
 
 # Install targets
 install(TARGETS forge forgevm DESTINATION bin)
+install(TARGETS forge_core ARCHIVE DESTINATION lib)
 if(FORGE_WITH_LSP)
     install(TARGETS forge-lsp DESTINATION bin)
 endif()

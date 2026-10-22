@@ -6,6 +6,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/forge-debug.dir/__/src/compiler.cpp.o.d"
   "CMakeFiles/forge-debug.dir/__/src/lexer.cpp.o"
   "CMakeFiles/forge-debug.dir/__/src/lexer.cpp.o.d"
+  "CMakeFiles/forge-debug.dir/__/src/optimizer.cpp.o"
+  "CMakeFiles/forge-debug.dir/__/src/optimizer.cpp.o.d"
   "CMakeFiles/forge-debug.dir/__/src/parser.cpp.o"
   "CMakeFiles/forge-debug.dir/__/src/parser.cpp.o.d"
   "CMakeFiles/forge-debug.dir/__/src/value.cpp.o"

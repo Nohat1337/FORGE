@@ -8,7 +8,12 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
+  "/home/nohat1337/c++-fork/src/chunk.cpp" "tools/CMakeFiles/forge-format.dir/__/src/chunk.cpp.o" "gcc" "tools/CMakeFiles/forge-format.dir/__/src/chunk.cpp.o.d"
+  "/home/nohat1337/c++-fork/src/compiler.cpp" "tools/CMakeFiles/forge-format.dir/__/src/compiler.cpp.o" "gcc" "tools/CMakeFiles/forge-format.dir/__/src/compiler.cpp.o.d"
   "/home/nohat1337/c++-fork/src/lexer.cpp" "tools/CMakeFiles/forge-format.dir/__/src/lexer.cpp.o" "gcc" "tools/CMakeFiles/forge-format.dir/__/src/lexer.cpp.o.d"
+  "/home/nohat1337/c++-fork/src/optimizer.cpp" "tools/CMakeFiles/forge-format.dir/__/src/optimizer.cpp.o" "gcc" "tools/CMakeFiles/forge-format.dir/__/src/optimizer.cpp.o.d"
+  "/home/nohat1337/c++-fork/src/parser.cpp" "tools/CMakeFiles/forge-format.dir/__/src/parser.cpp.o" "gcc" "tools/CMakeFiles/forge-format.dir/__/src/parser.cpp.o.d"
+  "/home/nohat1337/c++-fork/src/value.cpp" "tools/CMakeFiles/forge-format.dir/__/src/value.cpp.o" "gcc" "tools/CMakeFiles/forge-format.dir/__/src/value.cpp.o.d"
   "/home/nohat1337/c++-fork/tools/format.cpp" "tools/CMakeFiles/forge-format.dir/format.cpp.o" "gcc" "tools/CMakeFiles/forge-format.dir/format.cpp.o.d"
   "" "tools/forge-format" "gcc" "tools/CMakeFiles/forge-format.dir/link.d"
   )

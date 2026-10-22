@@ -1,0 +1,138 @@
+{
+  "name": "forge-lang",
+  "displayName": "Forge",
+  "description": "Forge language support: syntax highlighting, completion, hover, diagnostics, go-to-definition, run/build and native library export.",
+  "version": "0.1.0",
+  "publisher": "forge-lang",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Debuggers",
+    "Snippets"
+  ],
+  "keywords": [
+    "forge",
+    "fge",
+    "language server"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:forge",
+    "workspaceContains:**/*.fge",
+    "workspaceContains:**/ForgeLists.txt"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "forge",
+        "aliases": [
+          "Forge",
+          "forge"
+        ],
+        "extensions": [
+          ".fge",
+          ".fclass"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "forge",
+        "scopeName": "source.forge",
+        "path": "./syntaxes/forge.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "forge.runFile",
+        "title": "Forge: Run File",
+        "category": "Forge"
+      },
+      {
+        "command": "forge.runTrusted",
+        "title": "Forge: Run File (trusted / FFI enabled)",
+        "category": "Forge"
+      },
+      {
+        "command": "forge.buildProject",
+        "title": "Forge: Build Project (ForgeLists.txt)",
+        "category": "Forge"
+      },
+      {
+        "command": "forge.exportLibrary",
+        "title": "Forge: Export Project as Shared Library",
+        "category": "Forge"
+      },
+      {
+        "command": "forge.newNativeLibrary",
+        "title": "Forge: New Native Library (C++ project)",
+        "category": "Forge"
+      },
+      {
+        "command": "forge.newAndroidApp",
+        "title": "Forge: New Android App",
+        "category": "Forge"
+      },
+      {
+        "command": "forge.restartServer",
+        "title": "Forge: Restart Language Server",
+        "category": "Forge"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "forge.runFile",
+          "when": "editorLangId == forge",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "forge.runFile",
+          "when": "editorLangId == forge"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "forge.runFile",
+        "key": "ctrl+f5",
+        "mac": "cmd+f5",
+        "when": "editorLangId == forge"
+      }
+    ],
+    "configuration": {
+      "title": "Forge",
+      "properties": {
+        "forge.languageServerPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the forge-lsp binary. Leave empty to search PATH and the build directories."
+        },
+        "forge.forgeVmPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the forgevm binary. Leave empty to search PATH and the build directories."
+        },
+        "forge.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Trace the language server communication."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node test/client.test.js"
+  }
+}

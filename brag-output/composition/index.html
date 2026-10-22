@@ -1,0 +1,906 @@
+<!doctype html>
+<html lang="en" data-resolution="landscape">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Forge — a programming language with a 135M model inside it</title>
+    <script src="assets/vendor/gsap.min.js"></script>
+    <style>
+      @font-face {
+        font-family: "ForgeSans";
+        src: url("assets/fonts/DejaVuSans-Bold.ttf") format("truetype");
+        font-weight: 700;
+        font-style: normal;
+      }
+      @font-face {
+        font-family: "ForgeMono";
+        src: url("assets/fonts/JetBrainsMonoNLNerdFontMono-Regular.ttf") format("truetype");
+        font-weight: 400;
+        font-style: normal;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #1e1e1e;
+      }
+      :root {
+        --bg: #1e1e1e;
+        --panel: #252526;
+        --activity: #333333;
+        --titlebar: #373738;
+        --accent: #007acc;
+        --accent-dk: #005690;
+        --accent-text: #3794ff;
+        --text: #d4d4d4;
+        --dim: #858585;
+        --bright: #e7e7e7;
+        --kw: #569cd6;
+        --ctrl: #c586c0;
+        --type: #4ec9b0;
+        --fn: #dcdcaa;
+        --str: #ce9178;
+        --num: #b5cea8;
+        --cmt: #6a9955;
+        --glow: 0.22;
+        --pulse: 1;
+        --cardglow: 0.12;
+      }
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        background: #1e1e1e;
+        overflow: hidden;
+        font-family: "ForgeSans", "DejaVu Sans", sans-serif;
+      }
+      .clip {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+
+      /* ---------- terminal window ---------- */
+      .term {
+        width: 100%;
+        background: #1e1e1e;
+        border: 1px solid #333333;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 40px 90px rgba(0, 0, 0, 0.55);
+      }
+      .term-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 42px;
+        padding: 0 16px;
+        background: #252526;
+        border-bottom: 1px solid #333333;
+      }
+      .tl {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        display: inline-block;
+      }
+      .tl.r {
+        background: #ff5f56;
+      }
+      .tl.y {
+        background: #ffbd2e;
+      }
+      .tl.g {
+        background: #27c93f;
+      }
+      .term-title {
+        margin-left: 10px;
+        font-family: "ForgeMono", monospace;
+        font-size: 16px;
+        color: #9d9d9d;
+      }
+      .term-body {
+        padding: 22px 28px 26px;
+        font-family: "ForgeMono", monospace;
+        font-size: 29px;
+        line-height: 1.6;
+        color: #d4d4d4;
+        font-variant-ligatures: none;
+        font-feature-settings: "liga" 0, "calt" 0;
+      }
+      .tline {
+        white-space: pre;
+        display: block;
+      }
+      .prompt {
+        color: #9d9d9d;
+      }
+      .tag {
+        color: #569cd6;
+      }
+      .caret {
+        display: inline-block;
+        width: 13px;
+        height: 26px;
+        vertical-align: -4px;
+        background: #d4d4d4;
+      }
+
+      /* ---------- scene 1 ---------- */
+      #s1 {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 54px;
+        padding: 0 120px;
+      }
+      .s1-head {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 30px;
+      }
+      .chip {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 9px 20px;
+        border-radius: 8px;
+        background: #007acc;
+      }
+      .chip-glow {
+        position: absolute;
+        inset: -22px;
+        border-radius: 26px;
+        background: radial-gradient(
+          ellipse at center,
+          rgba(0, 122, 204, 0.6),
+          rgba(0, 122, 204, 0) 70%
+        );
+        opacity: var(--glow);
+      }
+      .chip-text {
+        position: relative;
+        font-size: 22px;
+        letter-spacing: 0.28em;
+        padding-left: 0.28em;
+        color: #ffffff;
+      }
+      .s1-title {
+        font-size: 76px;
+        line-height: 1.1;
+        letter-spacing: -0.015em;
+        text-align: center;
+        color: #e7e7e7;
+        max-width: 1620px;
+      }
+      .tl-line {
+        display: block;
+      }
+      .hl {
+        color: #4ec9b0;
+      }
+      #s1-term {
+        width: 1240px;
+      }
+
+      /* ---------- scene 2 / 4 : IDE ---------- */
+      .stage {
+        display: flex;
+        align-items: center;
+        gap: 56px;
+        padding: 0 100px;
+      }
+      .stage-left {
+        flex: 0 0 430px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 24px;
+      }
+      .kicker {
+        font-family: "ForgeMono", monospace;
+        font-size: 19px;
+        letter-spacing: 0.26em;
+        color: #3794ff;
+      }
+      .tagline {
+        font-size: 72px;
+        line-height: 1.08;
+        color: #e7e7e7;
+      }
+      .tagline span {
+        display: block;
+      }
+      .note {
+        font-family: "ForgeMono", monospace;
+        font-size: 19px;
+        line-height: 1.5;
+        color: #8f8f8f;
+      }
+      .ide {
+        position: relative;
+        flex: 1 1 auto;
+        height: 800px;
+        background: #1e1e1e;
+        border: 1px solid #2f2f30;
+        border-radius: 10px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        box-shadow: 0 40px 100px rgba(0, 0, 0, 0.6);
+      }
+      .ide-title {
+        flex: 0 0 46px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 14px;
+        background: #373738;
+        border-bottom: 1px solid #2a2a2a;
+      }
+      .ide-name {
+        font-family: "ForgeMono", monospace;
+        font-size: 15px;
+        color: #b4b4b4;
+        margin-left: 8px;
+      }
+      .ide-actions {
+        margin-left: auto;
+        display: flex;
+        gap: 8px;
+      }
+      .ide-btn {
+        font-size: 15px;
+        color: #cccccc;
+        background: #3c3c3c;
+        border: 1px solid #4a4a4a;
+        border-radius: 4px;
+        padding: 5px 13px;
+      }
+      .ide-btn.primary {
+        background: #007acc;
+        border-color: #0a84d8;
+        color: #ffffff;
+      }
+      .ide-body {
+        flex: 1 1 auto;
+        display: flex;
+        min-height: 0;
+      }
+      .ide-activity {
+        flex: 0 0 46px;
+        background: #333333;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        padding-top: 12px;
+      }
+      .act {
+        width: 22px;
+        height: 22px;
+        border-radius: 4px;
+        background: #565656;
+      }
+      .act.on {
+        background: #007acc;
+      }
+      .ide-side {
+        flex: 0 0 218px;
+        background: #252526;
+        border-right: 1px solid #2a2a2a;
+      }
+      .side-head {
+        font-size: 12px;
+        letter-spacing: 0.1em;
+        color: #cccccc;
+        padding: 12px 14px 8px;
+      }
+      .side-filter {
+        margin: 0 10px 10px;
+        padding: 4px 8px;
+        border: 1px solid #3c3c3c;
+        border-radius: 3px;
+        background: #313131;
+        color: #9d9d9d;
+        font-size: 13px;
+        font-family: "ForgeMono", monospace;
+      }
+      .tree {
+        padding: 0 6px;
+        font-size: 14px;
+        color: #cccccc;
+      }
+      .tree-item {
+        padding: 3px 8px;
+        border-radius: 3px;
+      }
+      .tree-item.sel {
+        background: #37373d;
+      }
+      .ide-main {
+        flex: 1 1 auto;
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+      .ide-tabs {
+        flex: 0 0 36px;
+        background: #252526;
+        display: flex;
+        align-items: stretch;
+        border-bottom: 1px solid #1e1e1e;
+      }
+      .tab {
+        font-size: 14px;
+        color: #8f8f8f;
+        padding: 0 18px;
+        display: flex;
+        align-items: center;
+        border-right: 1px solid #1e1e1e;
+      }
+      .tab.on {
+        background: #1e1e1e;
+        color: #ffffff;
+        border-top: 1px solid #007acc;
+      }
+      .ide-editor {
+        flex: 1 1 auto;
+        background: #1e1e1e;
+        padding: 14px 0;
+        font-family: "ForgeMono", monospace;
+        font-size: 19px;
+        line-height: 1.62;
+        overflow: hidden;
+        font-variant-ligatures: none;
+        font-feature-settings: "liga" 0, "calt" 0;
+      }
+      .ed-line {
+        display: flex;
+      }
+      .ed-num {
+        flex: 0 0 56px;
+        text-align: right;
+        padding-right: 18px;
+        color: #8f8f8f;
+      }
+      .ed-code {
+        white-space: pre;
+        color: #d4d4d4;
+      }
+      .k {
+        color: #569cd6;
+      }
+      .s {
+        color: #ce9178;
+      }
+      .n {
+        color: #b5cea8;
+      }
+      .c {
+        color: #6a9955;
+      }
+      .f {
+        color: #dcdcaa;
+      }
+      .t {
+        color: #4ec9b0;
+      }
+      .ide-panel {
+        flex: 0 0 214px;
+        background: #252526;
+        border-top: 1px solid #1e1e1e;
+        display: flex;
+        flex-direction: column;
+      }
+      .panel-tabs {
+        flex: 0 0 32px;
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        padding: 0 16px;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        color: #8f8f8f;
+      }
+      .ptab.on {
+        color: #e7e7e7;
+        border-bottom: 1px solid #007acc;
+        padding-bottom: 1px;
+      }
+      .panel-body {
+        flex: 1 1 auto;
+        padding: 10px 16px;
+        font-family: "ForgeMono", monospace;
+        font-size: 19px;
+        line-height: 1.55;
+        color: #d4d4d4;
+        overflow: hidden;
+        font-variant-ligatures: none;
+        font-feature-settings: "liga" 0, "calt" 0;
+      }
+      .ide-status {
+        flex: 0 0 30px;
+        background: linear-gradient(90deg, #007acc, #005690);
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 0 12px;
+        font-size: 13px;
+        color: #ffffff;
+      }
+      .spacer {
+        flex: 1 1 auto;
+      }
+      .mouse {
+        position: absolute;
+        right: 148px;
+        top: 9px;
+        width: 22px;
+        height: 22px;
+      }
+
+      /* ---------- scene 3 ---------- */
+      #s3 {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 26px;
+      }
+      .flow-label {
+        font-family: "ForgeMono", monospace;
+        font-size: 21px;
+        letter-spacing: 0.2em;
+        color: #3794ff;
+      }
+      #s3-term {
+        width: 1360px;
+      }
+
+      /* ---------- scene 5 ---------- */
+      #s5 {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 92px;
+      }
+      #s5-term {
+        width: 1340px;
+      }
+      #s5-card {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 22px;
+        text-align: center;
+      }
+      .card-glow {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 900px;
+        height: 420px;
+        margin-left: -450px;
+        margin-top: -210px;
+        border-radius: 50%;
+        background: radial-gradient(
+          ellipse at center,
+          rgba(0, 122, 204, 0.45),
+          rgba(0, 122, 204, 0) 70%
+        );
+        opacity: var(--cardglow);
+      }
+      #s5-wordmark-pulse {
+        position: relative;
+        display: block;
+        transform: scale(var(--pulse));
+      }
+      .wordmark {
+        font-size: 88px;
+        letter-spacing: 0.3em;
+        padding-left: 0.3em;
+        color: #3794ff;
+        line-height: 1.05;
+      }
+      .card-tag {
+        font-size: 34px;
+        color: #d4d4d4;
+        line-height: 1.3;
+      }
+      .card-url {
+        font-family: "ForgeMono", monospace;
+        font-size: 23px;
+        color: #3794ff;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="20.02"
+      data-width="1920"
+      data-height="1080"
+    >
+      <!-- ================= SCENE 1 : hook ================= -->
+      <section id="s1" class="clip" data-start="0" data-duration="4.02" data-track-index="1">
+        <div class="s1-head">
+          <div class="chip" id="s1-chip">
+            <span class="chip-glow" id="s1-chip-glow"></span>
+            <span class="chip-text">FORGE</span>
+          </div>
+          <h1 class="s1-title">
+            <span class="tl-line" id="s1-title-l1">a programming language with</span>
+            <span class="tl-line" id="s1-title-l2">
+              a <span class="hl">135M</span> model inside it
+            </span>
+          </h1>
+        </div>
+        <div class="term" id="s1-term">
+          <div class="term-bar">
+            <span class="tl r"></span><span class="tl y"></span><span class="tl g"></span>
+            <span class="term-title">forge — llm_demo.fge</span>
+          </div>
+          <div class="term-body">
+            <div class="tline"><span class="prompt">&gt;&gt; </span><span id="s1-typed"></span><span class="caret" id="s1-caret"></span></div>
+            <div class="tline" id="s1-log1"><span class="tag">[LLAMA]</span> Loading: models/SmolLM-135M.Q8_0.gguf</div>
+            <div class="tline" id="s1-log2"><span class="tag">[LLAMA]</span> Vocab=49152 Context=2048</div>
+            <div class="tline" id="s1-log3"><span class="tag">[LLAMA]</span> Ready!</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= SCENE 2 : the IDE ================= -->
+      <section id="s2" class="clip" data-start="4.02" data-duration="4" data-track-index="2">
+        <div class="stage">
+          <div class="stage-left">
+            <div class="kicker" id="s2-kicker">FORGE IDE</div>
+            <div class="tagline">
+              <span id="s2-t1">write.</span>
+              <span id="s2-t2">compile.</span>
+              <span id="s2-t3">run.</span>
+            </div>
+            <div class="note" id="s2-note">SDL2 IDE — Linux, Windows, macOS</div>
+          </div>
+          <div class="ide" id="s2-ide">
+            <div class="ide-title">
+              <span class="tl r"></span><span class="tl y"></span><span class="tl g"></span>
+              <span class="ide-name">Forge IDE</span>
+              <div class="ide-actions">
+                <span class="ide-btn">New</span>
+                <span class="ide-btn">Open</span>
+                <span class="ide-btn">Save</span>
+                <span class="ide-btn primary">Run</span>
+                <span class="ide-btn">Build</span>
+              </div>
+            </div>
+            <div class="ide-body">
+              <div class="ide-activity" id="s2-act">
+                <span class="act on"></span><span class="act"></span><span class="act"></span>
+                <span class="act"></span><span class="act"></span>
+              </div>
+              <div class="ide-side" id="s2-side">
+                <div class="side-head">EXPLORER</div>
+                <div class="side-filter">filter files...</div>
+                <div class="tree">
+                  <div class="tree-item">src</div>
+                  <div class="tree-item">examples</div>
+                  <div class="tree-item sel">hello.fge</div>
+                  <div class="tree-item">main.fge</div>
+                  <div class="tree-item">compute_demo.fge</div>
+                </div>
+              </div>
+              <div class="ide-main">
+                <div class="ide-tabs">
+                  <span class="tab on">hello.fge</span>
+                  <span class="tab">output</span>
+                </div>
+                <div class="ide-editor">
+                  <div class="ed-line"><span class="ed-num">1</span><span class="ed-code"><span class="c">// hello.fge</span></span></div>
+                  <div class="ed-line"><span class="ed-num">2</span><span class="ed-code"><span class="k">print</span>(<span class="s">"Hello, Forge!"</span>)</span></div>
+                  <div class="ed-line"><span class="ed-num">3</span><span class="ed-code"> </span></div>
+                  <div class="ed-line"><span class="ed-num">4</span><span class="ed-code"><span class="c">// Variables</span></span></div>
+                  <div class="ed-line"><span class="ed-num">5</span><span class="ed-code"><span class="k">let</span> name = <span class="s">"World"</span></span></div>
+                  <div class="ed-line"><span class="ed-num">6</span><span class="ed-code"><span class="k">const</span> PI = <span class="n">3.14159</span></span></div>
+                  <div class="ed-line"><span class="ed-num">7</span><span class="ed-code"> </span></div>
+                  <div class="ed-line"><span class="ed-num">8</span><span class="ed-code"><span class="c">// Functions</span></span></div>
+                  <div class="ed-line"><span class="ed-num">9</span><span class="ed-code"><span class="k">fn</span> <span class="f">greet</span>(person) {</span></div>
+                  <div class="ed-line"><span class="ed-num">10</span><span class="ed-code">    <span class="k">return</span> <span class="s">"Hello, "</span> + person + <span class="s">"!"</span></span></div>
+                  <div class="ed-line"><span class="ed-num">11</span><span class="ed-code">}</span></div>
+                </div>
+                <div class="ide-panel">
+                  <div class="panel-tabs">
+                    <span class="ptab on">TERMINAL</span>
+                    <span class="ptab">OUTPUT</span>
+                  </div>
+                  <div class="panel-body">
+                    <div class="tline"><span class="prompt">&gt;&gt; </span><span id="s2-out"></span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="ide-status">
+              <span class="st">main</span>
+              <span class="st">0 errors, 0 warnings</span>
+              <span class="spacer"></span>
+              <span class="st">Ln 1, Col 1</span>
+              <span class="st">Spaces: 4</span>
+              <span class="st">Forge</span>
+              <span class="st">UTF-8</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= SCENE 3 : compile to bytecode ================= -->
+      <section id="s3" class="clip" data-start="8.02" data-duration="4.99" data-track-index="3">
+        <div class="flow-label" id="s3-label">SOURCE &rarr; BYTECODE &rarr; VM</div>
+        <div class="term" id="s3-term">
+          <div class="term-bar">
+            <span class="tl r"></span><span class="tl y"></span><span class="tl g"></span>
+            <span class="term-title">forge — bash</span>
+          </div>
+          <div class="term-body">
+            <div class="tline"><span class="prompt">$ </span><span id="s3-cmd1"></span></div>
+            <div class="tline" id="s3-o1">Hello, Forge!</div>
+            <div class="tline"><span class="prompt">$ </span><span id="s3-cmd2"></span></div>
+            <div class="tline" id="s3-o2">Compiled hello.fge -&gt; hello.fclass</div>
+            <div class="tline" id="s3-o3">  135 bytes, 1 method(s)</div>
+            <div class="tline"><span class="prompt">$ </span><span id="s3-cmd3"></span></div>
+            <div class="tline" id="s3-o4">Hello, Forge!</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= SCENE 4 : native calls ================= -->
+      <section id="s4" class="clip" data-start="13.01" data-duration="3.51" data-track-index="4">
+        <div class="stage">
+          <div class="stage-left">
+            <div class="kicker" id="s4-kicker">FFI</div>
+            <div class="tagline">
+              <span id="s4-t1">calling</span>
+              <span id="s4-t2">native C</span>
+            </div>
+            <div class="note" id="s4-note">ffi.open &middot; ffi.sym &middot; ffi.call_int</div>
+          </div>
+          <div class="ide" id="s4-ide">
+            <div class="ide-title">
+              <span class="tl r"></span><span class="tl y"></span><span class="tl g"></span>
+              <span class="ide-name">Forge IDE</span>
+              <div class="ide-actions">
+                <span class="ide-btn">New</span>
+                <span class="ide-btn">Open</span>
+                <span class="ide-btn">Save</span>
+                <span class="ide-btn primary">Run</span>
+                <span class="ide-btn">Build</span>
+              </div>
+            </div>
+            <div class="ide-body">
+              <div class="ide-activity">
+                <span class="act on"></span><span class="act"></span><span class="act"></span>
+                <span class="act"></span><span class="act"></span>
+              </div>
+              <div class="ide-side">
+                <div class="side-head">EXPLORER</div>
+                <div class="side-filter">filter files...</div>
+                <div class="tree">
+                  <div class="tree-item">src</div>
+                  <div class="tree-item">examples</div>
+                  <div class="tree-item sel">main.fge</div>
+                  <div class="tree-item">hello.fge</div>
+                  <div class="tree-item">compute_demo.fge</div>
+                </div>
+              </div>
+              <div class="ide-main">
+                <div class="ide-tabs">
+                  <span class="tab on">main.fge</span>
+                  <span class="tab">output</span>
+                </div>
+                <div class="ide-editor">
+                  <div class="ed-line"><span class="ed-num">1</span><span class="ed-code"><span class="k">import</span> <span class="s">"ffi"</span></span></div>
+                  <div class="ed-line"><span class="ed-num">2</span><span class="ed-code"> </span></div>
+                  <div class="ed-line"><span class="ed-num">3</span><span class="ed-code"><span class="k">let</span> lib = <span class="f">ffi</span>.open(<span class="s">"./libffinative.so"</span>)</span></div>
+                  <div class="ed-line"><span class="ed-num">4</span><span class="ed-code"> </span></div>
+                  <div class="ed-line"><span class="ed-num">5</span><span class="ed-code"><span class="k">let</span> p_add  = <span class="f">ffi</span>.sym(lib, <span class="s">"add"</span>)</span></div>
+                  <div class="ed-line"><span class="ed-num">6</span><span class="ed-code"><span class="k">let</span> p_fib  = <span class="f">ffi</span>.sym(lib, <span class="s">"fibonacci"</span>)</span></div>
+                  <div class="ed-line"><span class="ed-num">7</span><span class="ed-code"> </span></div>
+                  <div class="ed-line"><span class="ed-num">8</span><span class="ed-code"><span class="k">print</span>(<span class="s">"add(2, 3)          = "</span> + <span class="f">str</span>(<span class="f">ffi</span>.call_int(p_add, 2, 3)))</span></div>
+                  <div class="ed-line"><span class="ed-num">9</span><span class="ed-code"><span class="k">print</span>(<span class="s">"fibonacci(20)      = "</span> + <span class="f">str</span>(<span class="f">ffi</span>.call_int(p_fib, 20)))</span></div>
+                </div>
+                <div class="ide-panel">
+                  <div class="panel-tabs">
+                    <span class="ptab on">TERMINAL</span>
+                    <span class="ptab">OUTPUT</span>
+                  </div>
+                  <div class="panel-body">
+                    <div class="tline" id="s4-res1">add(2, 3)          = 5</div>
+                    <div class="tline" id="s4-res2">fibonacci(20)      = 6765</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="ide-status">
+              <span class="st">main</span>
+              <span class="st">0 errors, 0 warnings</span>
+              <span class="spacer"></span>
+              <span class="st">Ln 1, Col 1</span>
+              <span class="st">Spaces: 4</span>
+              <span class="st">Forge</span>
+              <span class="st">UTF-8</span>
+            </div>
+            <svg class="mouse" id="s4-cursor" viewBox="0 0 24 24" fill="none">
+              <path d="M4 2 L4 20 L9 15 L12.5 22 L16 20.5 L12.5 13.5 L19 13.5 Z" fill="#ffffff" stroke="#000000" stroke-width="1" />
+            </svg>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= SCENE 5 : agent + end card ================= -->
+      <section id="s5" class="clip" data-start="16.52" data-duration="3.5" data-track-index="5">
+        <div class="term" id="s5-term">
+          <div class="term-bar">
+            <span class="tl r"></span><span class="tl y"></span><span class="tl g"></span>
+            <span class="term-title">forge — repl</span>
+          </div>
+          <div class="term-body">
+            <div class="tline" id="s5-call"><span class="prompt">&gt;&gt; </span>llm.faw_tool(<span class="s">"calculate"</span>, <span class="s">"expression"</span>, <span class="s">"2 + 3 * 7 - 4 / 2"</span>)</div>
+            <div class="tline" id="s5-res">21</div>
+          </div>
+        </div>
+        <div id="s5-card">
+          <div class="card-glow" id="s5-card-glow"></div>
+          <div id="s5-wordmark-pulse">
+            <div class="wordmark" id="s5-wordmark">FORGE</div>
+          </div>
+          <div class="card-tag" id="s5-tag">Compiles to bytecode. Runs on a stack-based VM.</div>
+          <div class="card-url" id="s5-url">github.com/Nohat1337/FORGE</div>
+        </div>
+      </section>
+
+      <!-- ================= AUDIO ================= -->
+      <audio
+        id="bgm"
+        src="assets/music/happy-beats-business-moves-vol-1-by-ende-dot-app.mp3"
+        data-start="0"
+        data-duration="20.02"
+        data-track-index="10"
+        data-volume="1"
+        data-automation='{"version":1,"lanes":[{"target":"volume","points":[{"t":0,"v":0},{"t":0.4,"v":0.55},{"t":18.5,"v":0.55},{"t":19.9,"v":0}]}]}'
+      ></audio>
+      <audio id="key1" src="assets/sfx/keyboard/keypress-001.wav" data-start="0.95" data-duration="0.25" data-track-index="11" data-volume="0.55"></audio>
+      <audio id="key2" src="assets/sfx/keyboard/keypress-029.wav" data-start="1.25" data-duration="0.25" data-track-index="12" data-volume="0.65"></audio>
+      <audio id="key3" src="assets/sfx/keyboard/keypress-022.wav" data-start="1.55" data-duration="0.25" data-track-index="13" data-volume="0.75"></audio>
+      <audio id="key4" src="assets/sfx/keyboard/keypress-015.wav" data-start="1.8" data-duration="0.25" data-track-index="14" data-volume="0.85"></audio>
+      <audio id="sfx-enter" src="assets/sfx/interface/select_008.ogg" data-start="1.93" data-duration="0.05" data-track-index="15" data-volume="0.35"></audio>
+      <audio id="sfx-drop1" src="assets/sfx/interface/drop_001.ogg" data-start="2.02" data-duration="0.11" data-track-index="16" data-volume="0.3"></audio>
+      <audio id="sfx-ide" src="assets/sfx/impact/impactSoft_medium_001.ogg" data-start="4.02" data-duration="0.18" data-track-index="17" data-volume="0.3"></audio>
+      <audio id="sfx-run" src="assets/sfx/interface/click_002.ogg" data-start="5.78" data-duration="0.01" data-track-index="18" data-volume="0.3"></audio>
+      <audio id="sfx-term3" src="assets/sfx/interface/drop_003.ogg" data-start="8.02" data-duration="0.19" data-track-index="19" data-volume="0.3"></audio>
+      <audio id="sfx-mouse" src="assets/sfx/ui/mouseclick1.ogg" data-start="13.85" data-duration="0.06" data-track-index="20" data-volume="0.35"></audio>
+      <audio id="sfx-term5" src="assets/sfx/impact/impactGeneric_light_000.ogg" data-start="16.52" data-duration="0.14" data-track-index="21" data-volume="0.3"></audio>
+      <audio id="sfx-bell" src="assets/sfx/impact/impactBell_heavy_000.ogg" data-start="18.02" data-duration="1.48" data-track-index="22" data-volume="0.32"></audio>
+    </div>
+
+    <script>
+      var AF = [[0.479,0.941,0.076],[0.508,0.459,0.101],[0.433,0.026,0.13],[0.432,0.027,0.157],[0.406,0.018,0.171],[0.383,0.015,0.153],[0.382,0.02,0.146],[0.494,0.035,0.181],[0.481,0.032,0.137],[0.467,0.011,0.144],[0.45,0.01,0.133],[0.412,0.005,0.113],[0.355,0.022,0.131],[0.337,0.012,0.128],[0.349,0.018,0.098],[0.352,0.024,0.211],[0.345,0.023,0.182],[0.336,0.013,0.086],[0.331,0.029,0.11],[0.579,0.014,0.095],[0.484,0.012,0.074],[0.472,0.01,0.075],[0.492,0.01,0.094],[0.481,0.008,0.083],[0.454,0.003,0.06],[0.406,0.012,0.054],[0.395,0.025,0.074],[0.335,0.009,0.045],[0.304,0.011,0.046],[0.3,0.038,0.082],[0.53,0.059,0.142],[0.462,0.013,0.07],[0.433,0.009,0.041],[0.424,0.012,0.046],[0.313,0.008,0.046],[0.273,0.008,0.043],[0.288,0.01,0.03],[0.389,0.019,0.058],[0.368,0.013,0.039],[0.351,0.009,0.027],[0.32,0.012,0.038],[0.445,0.01,0.137],[0.435,0.017,0.047],[0.405,0.012,0.024],[0.414,0.018,0.052],[0.412,0.011,0.15],[0.294,0.027,0.116],[0.266,0.014,0.079],[0.283,0.022,0.073],[0.432,0.026,0.045],[0.344,0.012,0.023],[0.338,0.017,0.028],[0.468,0.014,0.08],[0.441,0.013,0.056],[0.438,0.004,0.032],[0.43,0.001,0.032],[0.378,0.011,0.034],[0.267,0.008,0.02],[0.276,0.019,0.024],[0.259,0.045,0.047],[0.559,0.617,0.094],[0.449,0.956,0.043],[0.45,0.585,0.033],[0.436,0.48,0.039],[0.412,0.51,0.052],[0.361,0.514,0.037],[0.393,0.473,0.027],[0.493,0.541,0.199],[0.622,0.48,0.131],[0.519,0.498,0.023],[0.468,0.481,0.021],[0.493,0.476,0.031],[0.337,0.49,0.019],[0.289,0.477,0.011],[0.282,0.513,0.043],[0.328,0.471,0.166],[0.278,0.445,0.115],[0.286,0.475,0.068],[0.288,0.518,0.125],[0.545,0.44,0.141],[0.478,0.504,0.035],[0.466,0.486,0.024],[0.498,0.503,0.024],[0.443,0.505,0.016],[0.368,0.502,0.018],[0.307,0.519,0.019],[0.383,0.579,0.051],[0.343,0.535,0.019],[0.338,0.523,0.014],[0.321,0.547,0.094],[0.528,0.484,0.197],[0.459,0.514,0.026],[0.43,0.483,0.007],[0.43,0.509,0.016],[0.362,0.507,0.028],[0.259,0.525,0.016],[0.245,0.561,0.014],[0.368,0.627,0.055],[0.368,0.575,0.031],[0.31,0.5,0.015],[0.31,0.543,0.023],[0.363,0.496,0.225],[0.382,0.446,0.108],[0.417,0.442,0.015],[0.402,0.438,0.045],[0.378,0.429,0.161],[0.313,0.427,0.099],[0.231,0.45,0.062],[0.21,0.477,0.083],[0.356,0.498,0.061],[0.288,0.483,0.02],[0.308,0.475,0.022],[0.449,0.525,0.198],[0.471,0.45,0.106],[0.454,0.437,0.017],[0.439,0.443,0.01],[0.426,0.457,0.021],[0.323,0.455,0.013],[0.233,0.473,0.01],[0.217,0.499,0.048],[0.54,0.957,0.106],[0.561,0.578,0.047],[0.493,0.091,0.021],[0.464,0.035,0.025],[0.406,0.039,0.031],[0.385,0.038,0.019],[0.401,0.057,0.025],[0.524,0.026,0.099],[0.533,0.043,0.115],[0.456,0.036,0.026],[0.474,0.037,0.016],[0.421,0.029,0.04],[0.344,0.034,0.026],[0.367,0.038,0.014],[0.362,0.026,0.055],[0.368,0.058,0.249],[0.36,0.044,0.173],[0.329,0.034,0.07],[0.363,0.057,0.098],[0.568,0.063,0.107],[0.497,0.051,0.035],[0.471,0.029,0.018],[0.512,0.022,0.025],[0.467,0.031,0.022],[0.402,0.041,0.018],[0.342,0.032,0.012],[0.401,0.054,0.053],[0.365,0.063,0.032],[0.41,0.102,0.015],[0.512,0.159,0.025],[0.572,0.143,0.068],[0.526,0.05,0.015],[0.466,0.038,0.012],[0.433,0.026,0.017],[0.359,0.029,0.032],[0.272,0.051,0.013],[0.289,0.061,0.014],[0.387,0.02,0.046],[0.382,0.049,0.028],[0.341,0.068,0.027],[0.329,0.049,0.022],[0.451,0.01,0.11],[0.422,0.037,0.039],[0.418,0.037,0.016],[0.406,0.044,0.074],[0.385,0.029,0.189],[0.329,0.041,0.126],[0.286,0.031,0.081],[0.309,0.04,0.09],[0.44,0.034,0.075],[0.359,0.028,0.02],[0.356,0.03,0.017],[0.526,0.022,0.111],[0.5,0.022,0.058],[0.48,0.036,0.021],[0.438,0.03,0.018],[0.388,0.033,0.04],[0.292,0.022,0.021],[0.281,0.028,0.016],[0.28,0.043,0.041],[0.59,0.391,0.085],[0.432,0.826,0.016],[0.48,0.184,0.014],[0.414,0.217,0.018],[0.388,0.245,0.023],[0.405,0.232,0.01],[0.349,0.24,0.016],[0.457,0.232,0.163],[0.471,0.233,0.085],[0.408,0.21,0.031],[0.445,0.21,0.023],[0.409,0.218,0.042],[0.351,0.256,0.026],[0.346,0.232,0.017],[0.306,0.251,0.06],[0.326,0.206,0.221],[0.309,0.197,0.165],[0.278,0.235,0.08],[0.32,0.249,0.087],[0.528,0.203,0.075],[0.382,0.218,0.023],[0.41,0.228,0.018],[0.386,0.235,0.022],[0.355,0.215,0.02],[0.305,0.227,0.013],[0.258,0.24,0.018],[0.393,0.305,0.047],[0.362,0.234,0.017],[0.281,0.227,0.014],[0.308,0.234,0.091],[0.542,0.249,0.195],[0.433,0.196,0.028],[0.451,0.213,0.013],[0.43,0.207,0.018],[0.387,0.217,0.019],[0.311,0.197,0.013],[0.26,0.206,0.014],[0.46,0.299,0.088],[0.505,0.214,0.057],[0.346,0.175,0.017],[0.382,0.21,0.013],[0.443,0.218,0.109],[0.403,0.218,0.054],[0.467,0.183,0.012],[0.406,0.203,0.08],[0.43,0.194,0.207],[0.396,0.171,0.108],[0.279,0.213,0.078],[0.272,0.188,0.07],[0.463,0.224,0.045],[0.373,0.173,0.021],[0.395,0.192,0.021],[0.372,0.218,0.133],[0.49,0.164,0.112],[0.374,0.184,0.021],[0.355,0.156,0.018],[0.356,0.202,0.022],[0.289,0.181,0.014],[0.213,0.193,0.018],[0.244,0.182,0.054],[0.534,0.891,0.135],[0.515,0.452,0.03],[0.46,0.022,0.018],[0.415,0.029,0.019],[0.424,0.027,0.023],[0.396,0.022,0.02],[0.401,0.024,0.024],[0.569,0.029,0.205],[0.537,0.024,0.119],[0.506,0.015,0.04],[0.502,0.009,0.029],[0.443,0.016,0.045],[0.35,0.02,0.025],[0.35,0.018,0.013],[0.34,0.016,0.09],[0.365,0.03,0.182],[0.319,0.024,0.166],[0.318,0.023,0.124],[0.332,0.021,0.108],[0.543,0.015,0.124],[0.467,0.007,0.049],[0.479,0.004,0.039],[0.492,0.02,0.029],[0.453,0.024,0.033],[0.423,0.01,0.027],[0.337,0.007,0.017],[0.37,0.01,0.051],[0.398,0.007,0.032],[0.384,0.018,0.022],[0.365,0.027,0.081],[0.591,0.04,0.232],[0.482,0.015,0.068],[0.472,0.01,0.026],[0.451,0.017,0.026],[0.359,0.012,0.041],[0.32,0.008,0.03],[0.32,0.021,0.017],[0.4,0.016,0.073],[0.421,0.012,0.052],[0.408,0.009,0.032],[0.381,0.007,0.031],[0.491,0.018,0.169],[0.417,0.028,0.059],[0.411,0.02,0.027],[0.398,0.027,0.089],[0.388,0.022,0.249],[0.323,0.014,0.209],[0.322,0.016,0.119],[0.324,0.019,0.101],[0.429,0.032,0.056],[0.392,0.024,0.032],[0.36,0.015,0.031],[0.447,0.024,0.173],[0.462,0.029,0.145],[0.448,0.009,0.038],[0.433,0.007,0.03],[0.385,0.009,0.034],[0.33,0.012,0.016],[0.371,0.014,0.015],[0.379,0.062,0.019],[0.533,0.644,0.043],[0.457,1.0,0.029],[0.469,0.642,0.038],[0.449,0.474,0.031],[0.423,0.516,0.05],[0.355,0.518,0.048],[0.388,0.487,0.028],[0.498,0.546,0.212],[0.612,0.502,0.137],[0.517,0.501,0.023],[0.465,0.502,0.026],[0.492,0.504,0.044],[0.325,0.498,0.028],[0.318,0.505,0.017],[0.291,0.542,0.089],[0.378,0.499,0.243],[0.314,0.511,0.198],[0.317,0.494,0.097],[0.28,0.522,0.1],[0.511,0.509,0.116],[0.469,0.521,0.052],[0.478,0.524,0.032],[0.54,0.527,0.029],[0.437,0.527,0.027],[0.355,0.51,0.019],[0.285,0.506,0.022],[0.383,0.552,0.049],[0.355,0.484,0.027],[0.355,0.485,0.025],[0.343,0.561,0.072],[0.545,0.504,0.163],[0.44,0.526,0.026],[0.415,0.498,0.01],[0.428,0.493,0.02],[0.378,0.541,0.029],[0.294,0.535,0.019],[0.26,0.549,0.019],[0.372,0.63,0.05],[0.393,0.539,0.036],[0.348,0.542,0.014],[0.329,0.532,0.024],[0.399,0.542,0.139],[0.45,0.422,0.071],[0.432,0.457,0.02],[0.456,0.448,0.089],[0.458,0.45,0.212],[0.342,0.415,0.184],[0.238,0.427,0.113],[0.243,0.481,0.085],[0.311,0.512,0.071],[0.269,0.464,0.035],[0.285,0.507,0.026],[0.401,0.505,0.119],[0.455,0.473,0.082],[0.415,0.453,0.016],[0.423,0.439,0.015],[0.387,0.466,0.019],[0.272,0.462,0.014],[0.239,0.485,0.013],[0.23,0.493,0.048],[0.554,0.95,0.101],[0.551,0.634,0.029],[0.438,0.075,0.018],[0.442,0.026,0.028],[0.407,0.047,0.04],[0.369,0.049,0.02],[0.39,0.048,0.025],[0.512,0.031,0.182],[0.55,0.031,0.112],[0.517,0.033,0.025],[0.492,0.049,0.018],[0.423,0.024,0.034],[0.337,0.041,0.017],[0.328,0.037,0.014],[0.342,0.03,0.083],[0.407,0.038,0.235],[0.364,0.053,0.192],[0.333,0.034,0.106],[0.345,0.058,0.118],[0.541,0.067,0.118],[0.478,0.041,0.036],[0.475,0.029,0.028],[0.517,0.044,0.03],[0.458,0.03,0.028],[0.383,0.016,0.02],[0.338,0.045,0.02],[0.373,0.045,0.069],[0.34,0.044,0.032],[0.333,0.037,0.015],[0.309,0.051,0.074],[0.534,0.048,0.171],[0.48,0.03,0.036],[0.424,0.034,0.021],[0.401,0.029,0.029],[0.342,0.042,0.031],[0.282,0.055,0.017],[0.296,0.051,0.015],[0.404,0.013,0.072],[0.383,0.044,0.047],[0.351,0.054,0.025],[0.339,0.025,0.025],[0.433,0.036,0.176],[0.407,0.026,0.07],[0.418,0.025,0.042],[0.407,0.029,0.098],[0.423,0.027,0.221],[0.328,0.035,0.198],[0.275,0.037,0.128],[0.315,0.06,0.115],[0.466,0.057,0.091],[0.405,0.019,0.037],[0.404,0.035,0.025],[0.504,0.021,0.083],[0.49,0.019,0.088],[0.462,0.028,0.031],[0.431,0.023,0.026],[0.371,0.017,0.045],[0.291,0.023,0.023],[0.313,0.028,0.023],[0.287,0.032,0.045],[0.58,0.38,0.095],[0.452,0.632,0.019],[0.466,0.193,0.02],[0.428,0.249,0.028],[0.414,0.261,0.032],[0.417,0.245,0.023],[0.375,0.243,0.032],[0.475,0.258,0.178],[0.464,0.271,0.1],[0.446,0.247,0.044],[0.457,0.204,0.033],[0.446,0.243,0.035],[0.34,0.248,0.024],[0.32,0.243,0.025],[0.3,0.256,0.062],[0.347,0.25,0.234],[0.301,0.217,0.185],[0.289,0.229,0.111],[0.318,0.237,0.098],[0.463,0.235,0.1],[0.341,0.237,0.061],[0.349,0.227,0.034],[0.339,0.255,0.03],[0.289,0.244,0.036],[0.293,0.232,0.034],[0.269,0.226,0.03],[0.446,0.301,0.048],[0.405,0.245,0.041],[0.328,0.241,0.046],[0.385,0.319,0.056],[0.553,0.254,0.198],[0.488,0.231,0.206],[0.475,0.207,0.133],[0.461,0.203,0.123],[0.446,0.176,0.28],[0.286,0.17,0.337],[0.286,0.209,0.267],[0.414,0.213,0.167],[0.416,0.236,0.099],[0.361,0.214,0.056],[0.361,0.231,0.079],[0.471,0.231,0.212],[0.42,0.238,0.127],[0.479,0.187,0.06],[0.457,0.247,0.167],[0.518,0.217,0.356],[0.338,0.155,0.412],[0.264,0.2,0.245],[0.261,0.191,0.166],[0.388,0.192,0.095],[0.292,0.164,0.064],[0.329,0.227,0.055],[0.391,0.218,0.163],[0.428,0.184,0.097],[0.367,0.182,0.04],[0.353,0.191,0.037],[0.343,0.197,0.035],[0.287,0.205,0.026],[0.218,0.189,0.02],[0.249,0.282,0.102],[0.874,0.692,0.361],[0.839,0.623,0.356],[0.579,0.568,0.426],[0.539,0.636,0.54],[0.406,0.218,0.571],[0.426,0.04,0.459],[0.451,0.048,0.412],[0.522,0.019,0.292],[0.547,0.018,0.34],[0.546,0.018,0.319],[0.536,0.012,0.24],[0.485,0.008,0.314],[0.415,0.016,0.332],[0.406,0.024,0.251],[0.427,0.022,0.228],[0.876,0.163,0.348],[0.708,0.379,0.235],[0.717,0.475,0.126],[0.347,0.536,0.144],[0.537,0.233,0.182],[0.516,0.026,0.17],[0.529,0.02,0.174],[0.622,0.025,0.234],[0.621,0.01,0.263],[0.505,0.015,0.133],[0.433,0.012,0.119],[0.413,0.015,0.11],[0.398,0.024,0.084],[0.384,0.013,0.066],[0.366,0.041,0.139],[0.839,0.098,0.336],[0.716,0.44,0.177],[0.654,0.575,0.116],[0.514,0.501,0.125],[0.356,0.227,0.125],[0.366,0.024,0.086],[0.388,0.015,0.074],[0.452,0.041,0.165],[0.446,0.043,0.24],[0.462,0.009,0.101],[0.418,0.021,0.096],[0.601,0.032,0.192],[0.596,0.03,0.15],[0.53,0.022,0.111],[0.469,0.03,0.148],[0.865,0.114,0.233],[0.736,0.382,0.171],[0.569,0.467,0.112],[0.461,0.5,0.1],[0.429,0.228,0.079],[0.415,0.018,0.057],[0.436,0.021,0.055],[0.625,0.03,0.266],[0.629,0.026,0.346],[0.522,0.013,0.113],[0.47,0.01,0.102],[0.438,0.018,0.128],[0.418,0.013,0.104],[0.391,0.009,0.064],[0.367,0.041,0.131],[0.84,0.368,0.253],[0.612,0.697,0.151],[0.671,0.724,0.109],[0.485,0.691,0.099],[0.439,0.513,0.119],[0.39,0.506,0.087],[0.435,0.496,0.067],[0.532,0.555,0.234],[0.622,0.598,0.234],[0.561,0.562,0.091],[0.518,0.557,0.063],[0.561,0.584,0.082],[0.373,0.591,0.065],[0.455,0.608,0.049],[0.346,0.586,0.079],[0.913,0.571,0.201],[0.686,0.684,0.184],[0.675,0.683,0.078],[0.438,0.766,0.125],[0.515,0.54,0.165],[0.51,0.465,0.074],[0.494,0.491,0.061],[0.646,0.532,0.236],[0.609,0.545,0.235],[0.523,0.529,0.095],[0.405,0.574,0.071],[0.446,0.616,0.087],[0.423,0.598,0.061],[0.391,0.609,0.04],[0.406,0.602,0.142],[0.812,0.596,0.294],[0.719,0.427,0.127],[0.659,0.583,0.077],[0.429,0.674,0.128],[0.361,0.375,0.174],[0.359,0.454,0.079],[0.365,0.502,0.05],[0.374,0.531,0.2],[0.425,0.548,0.225],[0.352,0.549,0.097],[0.393,0.561,0.055],[0.514,0.613,0.31],[0.59,0.563,0.28],[0.516,0.586,0.098],[0.488,0.597,0.091],[0.768,0.409,0.218],[0.656,0.327,0.158],[0.576,0.383,0.109],[0.343,0.311,0.103],[0.33,0.134,0.089],[0.309,0.381,0.047],[0.363,0.527,0.046],[0.464,0.629,0.196],[0.581,0.509,0.239],[0.504,0.54,0.092],[0.507,0.518,0.047],[0.484,0.573,0.074],[0.412,0.564,0.055],[0.395,0.575,0.036],[0.349,0.61,0.135],[0.884,0.61,0.251],[0.703,0.482,0.131]];
+
+      var tl = gsap.timeline({ paused: true });
+      var root = document.documentElement;
+
+      function typeInto(sel, text, start, dur) {
+        var el = document.querySelector(sel);
+        var proxy = { p: 0 };
+        tl.fromTo(
+          proxy,
+          { p: 0 },
+          {
+            p: 1,
+            duration: dur,
+            ease: "none",
+            immediateRender: false,
+            onUpdate: function () {
+              var n = Math.round(proxy.p * text.length);
+              el.textContent = text.slice(0, n);
+            },
+          },
+          start,
+        );
+        return el;
+      }
+
+      /* ---------------- SCENE 1 : hook ---------------- */
+      tl.fromTo("#s1-chip", { opacity: 0, y: -12 }, { opacity: 1, y: 0, duration: 0.35, ease: "power2.out" }, 0.02);
+      tl.fromTo("#s1-title-l1", { opacity: 0, y: 22 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, 0.1);
+      tl.fromTo("#s1-title-l2", { opacity: 0, y: 22 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, 0.38);
+      tl.fromTo("#s1-term", { opacity: 0, scale: 0.97 }, { opacity: 1, scale: 1, duration: 0.5, ease: "power2.out" }, 0.6);
+      typeInto("#s1-typed", 'import "llm"', 0.95, 0.88);
+      tl.to("#s1-caret", { opacity: 0, duration: 0.4, repeat: 5, yoyo: true, ease: "none" }, 1.9);
+      tl.fromTo("#s1-log1", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.28, ease: "power2.out" }, 2.02);
+      tl.fromTo("#s1-log2", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.28, ease: "power2.out" }, 2.52);
+      tl.fromTo("#s1-log3", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.28, ease: "power2.out" }, 3.02);
+
+      /* ---------------- SCENE 2 : the IDE ---------------- */
+      tl.fromTo("#s2-ide", { opacity: 0, scale: 0.975 }, { opacity: 1, scale: 1, duration: 0.45, ease: "power2.out" }, 4.02);
+      tl.fromTo("#s2-side", { opacity: 0, x: -18 }, { opacity: 1, x: 0, duration: 0.4, ease: "power2.out" }, 4.24);
+      tl.fromTo("#s2-act", { opacity: 0 }, { opacity: 1, duration: 0.35 }, 4.32);
+      tl.fromTo("#s2-kicker", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.35, ease: "power2.out" }, 4.3);
+      tl.fromTo("#s2-t1", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.35, ease: "power2.out" }, 4.45);
+      tl.fromTo("#s2-t2", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.35, ease: "power2.out" }, 4.82);
+      tl.fromTo("#s2-t3", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.35, ease: "power2.out" }, 5.19);
+      tl.fromTo("#s2-note", { opacity: 0 }, { opacity: 1, duration: 0.3 }, 5.5);
+      typeInto("#s2-out", "Hello, Forge!", 5.78, 0.5);
+
+      /* ---------------- SCENE 3 : source -> bytecode -> VM ---------------- */
+      tl.fromTo("#s3-term", { opacity: 0, scale: 0.975 }, { opacity: 1, scale: 1, duration: 0.45, ease: "power2.out" }, 8.02);
+      tl.fromTo("#s3-label", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, 8.25);
+      typeInto("#s3-cmd1", "forge hello.fge", 8.3, 0.42);
+      tl.fromTo("#s3-o1", { opacity: 0 }, { opacity: 1, duration: 0.2 }, 8.72);
+      typeInto("#s3-cmd2", "forgevm compile hello.fge hello.fclass", 9.6, 0.66);
+      tl.fromTo("#s3-o2", { opacity: 0 }, { opacity: 1, duration: 0.2 }, 10.3);
+      tl.fromTo("#s3-o3", { opacity: 0 }, { opacity: 1, duration: 0.2 }, 10.3);
+      typeInto("#s3-cmd3", "forgevm hello.fclass", 11.35, 0.46);
+      tl.fromTo("#s3-o4", { opacity: 0 }, { opacity: 1, duration: 0.2 }, 11.85);
+
+      /* ---------------- SCENE 4 : native calls ---------------- */
+      tl.fromTo("#s4-ide", { opacity: 0, scale: 0.975 }, { opacity: 1, scale: 1, duration: 0.45, ease: "power2.out" }, 13.01);
+      tl.fromTo("#s4-kicker", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.35, ease: "power2.out" }, 13.3);
+      tl.fromTo("#s4-t1", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.35, ease: "power2.out" }, 13.45);
+      tl.fromTo("#s4-t2", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.35, ease: "power2.out" }, 13.72);
+      tl.fromTo("#s4-note", { opacity: 0 }, { opacity: 1, duration: 0.3 }, 13.98);
+      tl.fromTo("#s4-cursor", { opacity: 0, x: -520, y: 190 }, { opacity: 1, duration: 0.2, ease: "none" }, 13.34);
+      tl.to("#s4-cursor", { x: 0, y: 0, duration: 0.52, ease: "power2.inOut" }, 13.5);
+      tl.to("#s4-cursor", { scale: 0.82, duration: 0.09, yoyo: true, repeat: 1, ease: "none" }, 13.85);
+      tl.fromTo("#s4-res1", { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.25, ease: "power2.out" }, 14.0);
+      tl.fromTo("#s4-res2", { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.25, ease: "power2.out" }, 15.3);
+
+      /* ---------------- SCENE 5 : agent call + end card ---------------- */
+      tl.fromTo("#s5-term", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.45, ease: "power2.out" }, 16.52);
+      tl.fromTo("#s5-call", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.3, ease: "power2.out" }, 16.62);
+      tl.fromTo("#s5-res", { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.25, ease: "power2.out" }, 17.0);
+      tl.fromTo("#s5-card", { opacity: 0, y: 26 }, { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }, 17.25);
+      tl.fromTo("#s5-wordmark", { opacity: 0 }, { opacity: 1, duration: 0.45 }, 17.35);
+      tl.fromTo("#s5-tag", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.45, ease: "power2.out" }, 17.55);
+      tl.fromTo("#s5-url", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.45, ease: "power2.out" }, 17.72);
+
+      /* ---------------- audio reactive ---------------- */
+      var audioProxy = { p: 0 };
+      tl.fromTo(
+        audioProxy,
+        { p: 0 },
+        {
+          p: 1,
+          duration: 20.02,
+          ease: "none",
+          onUpdate: function () {
+            var idx = Math.round(audioProxy.p * (AF.length - 1));
+            if (idx < 0) idx = 0;
+            if (idx > AF.length - 1) idx = AF.length - 1;
+            var f = AF[idx];
+            if (!f) return;
+            root.style.setProperty("--glow", (0.16 + f[1] * 0.5).toFixed(4));
+            root.style.setProperty("--pulse", (1 + f[0] * 0.03).toFixed(4));
+            root.style.setProperty("--cardglow", (0.08 + f[0] * 0.22).toFixed(4));
+          },
+        },
+        0,
+      );
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

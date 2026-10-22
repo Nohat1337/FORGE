@@ -299,6 +299,9 @@ public:
 
     bool interpret(std::shared_ptr<GCFunction> function);
     bool interpretSource(const std::string& source, const std::string& filename = "<script>");
+
+    // Call a top-level Forge function from C++ (embedding / export API).
+    bool callGlobal(const std::string& name, std::vector<FValue> args, FValue& result);
     bool interpretClassFile(const std::string& path);
     bool interpretClassFileData(const ClassFile& cf, const std::string& filename = "");
 
@@ -334,6 +337,7 @@ private:
     bool trustedMode_ = false;
 
     void reset();
+    bool runLoop();
     void runtimeError(const std::string& msg);
     bool handleError(const std::string& msg);
     bool call(GCClosure* closure, int argCount);

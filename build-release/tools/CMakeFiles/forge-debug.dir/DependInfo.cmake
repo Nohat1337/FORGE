@@ -11,6 +11,7 @@ set(CMAKE_DEPENDS_DEPENDENCY_FILES
   "/home/nohat1337/c++-fork/src/chunk.cpp" "tools/CMakeFiles/forge-debug.dir/__/src/chunk.cpp.o" "gcc" "tools/CMakeFiles/forge-debug.dir/__/src/chunk.cpp.o.d"
   "/home/nohat1337/c++-fork/src/compiler.cpp" "tools/CMakeFiles/forge-debug.dir/__/src/compiler.cpp.o" "gcc" "tools/CMakeFiles/forge-debug.dir/__/src/compiler.cpp.o.d"
   "/home/nohat1337/c++-fork/src/lexer.cpp" "tools/CMakeFiles/forge-debug.dir/__/src/lexer.cpp.o" "gcc" "tools/CMakeFiles/forge-debug.dir/__/src/lexer.cpp.o.d"
+  "/home/nohat1337/c++-fork/src/optimizer.cpp" "tools/CMakeFiles/forge-debug.dir/__/src/optimizer.cpp.o" "gcc" "tools/CMakeFiles/forge-debug.dir/__/src/optimizer.cpp.o.d"
   "/home/nohat1337/c++-fork/src/parser.cpp" "tools/CMakeFiles/forge-debug.dir/__/src/parser.cpp.o" "gcc" "tools/CMakeFiles/forge-debug.dir/__/src/parser.cpp.o.d"
   "/home/nohat1337/c++-fork/src/value.cpp" "tools/CMakeFiles/forge-debug.dir/__/src/value.cpp.o" "gcc" "tools/CMakeFiles/forge-debug.dir/__/src/value.cpp.o.d"
   "/home/nohat1337/c++-fork/src/vm.cpp" "tools/CMakeFiles/forge-debug.dir/__/src/vm.cpp.o" "gcc" "tools/CMakeFiles/forge-debug.dir/__/src/vm.cpp.o.d"

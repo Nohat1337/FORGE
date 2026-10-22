@@ -1,0 +1,1 @@
+Forge is a programming language with a 135M model inside it — compile to bytecode, call native C via FFI, or let the built-in FAW agent do the math.

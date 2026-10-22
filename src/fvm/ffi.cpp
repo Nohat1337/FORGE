@@ -7,6 +7,30 @@ namespace forge::fvm {
 static std::unordered_map<long long, void*> ffiLibraries;
 static long long nextHandle = 1;
 
+namespace {
+
+// Arguments may be numbers or strings. A string is passed as a pointer to
+// its C buffer, so a Forge program can hand `const char*` parameters to
+// native functions (e.g. the exported Forge library ABI).
+long long argToLongLong(const FValue& v) {
+    if (v.isString()) {
+        return reinterpret_cast<long long>(v.asString()->value.c_str());
+    }
+    if (v.type == FValueType::VAL_FLOAT) {
+        return (long long)v.asNumber();
+    }
+    return v.asInteger();
+}
+
+double argToDouble(const FValue& v) {
+    if (v.isString()) {
+        return 0.0;
+    }
+    return v.asNumber();
+}
+
+} // namespace
+
 void ForgeFFI::defineModule(ForgeVM& vm) {
     auto* ffiMod = new GCMap();
 
@@ -77,7 +101,7 @@ void ForgeFFI::defineModule(ForgeVM& vm) {
         // For safety, support up to 8 int args
         long long a[8] = {0};
         for (size_t i = 1; i < args.size() && i <= 8; i++) {
-            a[i-1] = args[i].asInteger();
+            a[i-1] = argToLongLong(args[i]);
         }
         long long result = fn(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
         return FValue::integer(result);
@@ -91,7 +115,7 @@ void ForgeFFI::defineModule(ForgeVM& vm) {
         FnPtr fn = reinterpret_cast<FnPtr>(args[0].asInteger());
         double a[8] = {0};
         for (size_t i = 1; i < args.size() && i <= 8; i++) {
-            a[i-1] = args[i].asNumber();
+            a[i-1] = argToDouble(args[i]);
         }
         double result = fn(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
         return FValue::floating(result);
@@ -105,7 +129,7 @@ void ForgeFFI::defineModule(ForgeVM& vm) {
         FnPtr fn = reinterpret_cast<FnPtr>(args[0].asInteger());
         long long a[8] = {0};
         for (size_t i = 1; i < args.size() && i <= 8; i++) {
-            a[i-1] = args[i].asInteger();
+            a[i-1] = argToLongLong(args[i]);
         }
         const char* result = fn(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
         if (!result) return FValue::nil();
@@ -120,7 +144,7 @@ void ForgeFFI::defineModule(ForgeVM& vm) {
         FnPtr fn = reinterpret_cast<FnPtr>(args[0].asInteger());
         long long a[8] = {0};
         for (size_t i = 1; i < args.size() && i <= 8; i++) {
-            a[i-1] = args[i].asInteger();
+            a[i-1] = argToLongLong(args[i]);
         }
         fn(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
         return FValue::nil();
