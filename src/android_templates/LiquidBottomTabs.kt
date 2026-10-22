@@ -26,12 +26,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastCoerceIn
@@ -62,15 +65,18 @@ fun LiquidBottomTabs(
     backdrop: Backdrop,
     tabsCount: Int,
     modifier: Modifier = Modifier,
+    tint: Color = Color.Unspecified,
     content: @Composable RowScope.() -> Unit
 ) {
     val isLightTheme = !isSystemInDarkTheme()
     val accentColor =
         if (isLightTheme) Color(0xFF0088FF)
         else Color(0xFF0091FF)
+    // the frosted bar: a light veil over the blurred backdrop, so the
+    // bar reads as glass instead of a dark slab
     val containerColor =
         if (isLightTheme) Color(0xFFFAFAFA).copy(0.4f)
-        else Color(0xFF121212).copy(0.4f)
+        else Color(0xFF8E8E93).copy(0.18f)
 
     val tabsBackdrop = rememberLayerBackdrop()
 
@@ -176,6 +182,25 @@ fun LiquidBottomTabs(
                         scaleX = scale
                         scaleY = scale
                     },
+                    // the rim of the frosted bar: without it the capsule
+                    // reads as a flat slab instead of a sheet of glass
+                    highlight = {
+                        Highlight.Ambient.copy(width = 1.2f.dp, blurRadius = 0.6f.dp)
+                    },
+                    shadow = {
+                        Shadow(
+                            radius = 20f.dp,
+                            offset = DpOffset(0f.dp, 8f.dp),
+                            color = Color.Black.copy(alpha = 0.28f)
+                        )
+                    },
+                    innerShadow = {
+                        InnerShadow(
+                            radius = 10f.dp,
+                            offset = DpOffset(0f.dp, 2f.dp),
+                            color = Color.Black.copy(alpha = 0.12f)
+                        )
+                    },
                     onDrawSurface = { drawRect(containerColor) }
                 )
                 .then(interactiveHighlight.modifier)
@@ -221,7 +246,11 @@ fun LiquidBottomTabs(
                     .height(56f.dp)
                     .fillMaxWidth()
                     .padding(horizontal = 4f.dp)
-                    .graphicsLayer(colorFilter = ColorFilter.tint(accentColor)),
+                    .graphicsLayer(
+                        colorFilter = ColorFilter.tint(
+                            if (tint.isSpecified) tint.copy(alpha = 0.55f) else accentColor
+                        )
+                    ),
                 verticalAlignment = Alignment.CenterVertically,
                 content = content
             )

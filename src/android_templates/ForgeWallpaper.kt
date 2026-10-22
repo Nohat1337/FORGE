@@ -46,6 +46,7 @@ fun ForgeWallpaper(modifier: Modifier = Modifier) {
         drawOrb(Offset(size.width * 0.56f, size.height * 0.12f), size.minDimension * 0.38f, phase * 0.7f)
         drawGrid()
         drawSpecks()
+        drawGlowDots(phase)
     }
 }
 
@@ -68,22 +69,54 @@ private fun DrawScope.drawGrid() {
     var x = 0f
     while (x < size.width) {
         drawLine(
-            Color.White.copy(alpha = 0.05f),
+            Color.White.copy(alpha = 0.10f),
             Offset(x, 0f),
             Offset(x, size.height),
-            strokeWidth = 1f
+            strokeWidth = 1.5f
         )
         x += step
     }
     var y = 0f
     while (y < size.height) {
         drawLine(
-            Color.White.copy(alpha = 0.05f),
+            Color.White.copy(alpha = 0.10f),
             Offset(0f, y),
             Offset(size.width, y),
-            strokeWidth = 1f
+            strokeWidth = 1.5f
         )
         y += step
+    }
+    // a second, coarser grid gives the lens longer wavelength detail
+    var x2 = step / 2f
+    while (x2 < size.width) {
+        drawLine(
+            Color(0xFF6AA9FF).copy(alpha = 0.07f),
+            Offset(x2, 0f),
+            Offset(x2, size.height),
+            strokeWidth = 1f
+        )
+        x2 += step
+    }
+}
+
+/** Bright points with a halo: the strongest detail the lens can bend. */
+private fun DrawScope.drawGlowDots(phase: Float) {
+    val dots = 14
+    for (i in 0 until dots) {
+        val h = hash(i * 7 + 3)
+        val x = h[0] * size.width
+        val y = (h[1] * size.height + sin(phase * 0.4f + i) * 18f)
+        val r = 2.5f + h[2] * 3.5f
+        drawCircle(
+            Brush.radialGradient(
+                colors = listOf(Color(0xCCBFE3FF), Color(0x0033AAFF)),
+                center = Offset(x, y),
+                radius = r * 6f
+            ),
+            radius = r * 6f,
+            center = Offset(x, y)
+        )
+        drawCircle(Color.White.copy(alpha = 0.85f), radius = r, center = Offset(x, y))
     }
 }
 

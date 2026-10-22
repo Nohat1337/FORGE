@@ -29,7 +29,13 @@ public final class ForgeGui {
     public static Object radio(List<Object> a) { return id(); }
     public static Object tabs(List<Object> a) { return id(); }
     public static Object list(List<Object> a) { return id(); }
+    public static Object bottombar(List<Object> a) { return id(); }
     public static Object combo(List<Object> a) { return id(); }
+    public static Object search(List<Object> a) { return id(); }
+    public static Object segmented(List<Object> a) { return id(); }
+    public static Object card(List<Object> a) { return id(); }
+    public static Object magnifier(List<Object> a) { return id(); }
+    public static Object stepper(List<Object> a) { return id(); }
 
     public static Object set_text(List<Object> a) { return null; }
     public static Object get_text(List<Object> a) { return ""; }
@@ -40,6 +46,8 @@ public final class ForgeGui {
     public static Object set_items(List<Object> a) { return null; }
     public static Object select(List<Object> a) { return null; }
     public static Object get_selected(List<Object> a) { return -1L; }
+    public static Object set_glass(List<Object> a) { return null; }
+    public static Object set_tint(List<Object> a) { return null; }
     public static Object close(List<Object> a) { return null; }
 
     public static Object tick(List<Object> a) { return Boolean.FALSE; }

@@ -38,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.IntOffset
@@ -45,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberCombinedBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
@@ -53,7 +55,9 @@ import com.kyant.backdrop.effects.vibrancy
 import com.kyant.shapes.Capsule
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
+import kotlin.math.cos
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 /**
  * The Forge `gui` module, rendered with Jetpack Compose and the Kyant0
@@ -98,6 +102,14 @@ object ForgeGui {
         var selected by mutableIntStateOf(-1)
         var items by mutableStateOf(emptyList<String>())
         var group by mutableStateOf("")
+        var hint by mutableStateOf("")
+
+        var tint by mutableIntStateOf(0)
+
+        // per widget glass tuning (see set_glass)
+        var blur by mutableFloatStateOf(6f)
+        var lens by mutableFloatStateOf(10f)
+        var dispersion by mutableStateOf(true)
     }
 
     // ---------------------------------------------------------------
@@ -137,15 +149,34 @@ object ForgeGui {
     private fun int(a: List<*>, i: Int): Int = (a.getOrNull(i) as? Number)?.toInt() ?: 0
     private fun str(a: List<*>, i: Int): String = a.getOrNull(i)?.toString() ?: ""
     private fun bool(a: List<*>, i: Int): Boolean = (a.getOrNull(i) as? Boolean) ?: false
+    private fun color(s: String): Color {
+        val hex = s.trim().removePrefix("#")
+        val value = hex.toLongOrNull(16) ?: return Color(0xFF0A84FF)
+        return when (hex.length) {
+            6 -> Color(0xFF000000 or value)
+            8 -> Color(value.toInt())
+            else -> Color(0xFF0A84FF)
+        }
+    }
+
     private fun split(s: String): List<String> =
         if (s.isEmpty()) emptyList() else s.split("|")
 
-    private fun add(kind: String, a: List<*>, xIdx: Int, yIdx: Int, wIdx: Int, hIdx: Int): ForgeWidget {
+    private fun add(
+        kind: String,
+        a: List<*>,
+        xIdx: Int,
+        yIdx: Int,
+        wIdx: Int,
+        hIdx: Int,
+        defW: Int = 120,
+        defH: Int = 40
+    ): ForgeWidget {
         val w = ForgeWidget(nextId++, kind)
         w.x = int(a, xIdx)
         w.y = int(a, yIdx)
-        w.w = if (a.size > wIdx) int(a, wIdx) else 120
-        w.h = if (a.size > hIdx) int(a, hIdx) else 40
+        w.w = if (a.size > wIdx) int(a, wIdx) else defW
+        w.h = if (a.size > hIdx) int(a, hIdx) else defH
         onUi { widgets.add(w) }
         return w
     }
@@ -183,7 +214,8 @@ object ForgeGui {
 
     @JvmStatic
     fun checkbox(a: List<*>): Any? {
-        val w = add("checkbox", a, 1, 2, 3, 4)
+        // gui.checkbox(window, x, y, label, checked)
+        val w = add("checkbox", a, 1, 2, 5, 6, 150, 26)
         w.text = str(a, if (a.size >= 5) 3 else 3)
         w.checked = bool(a, if (a.size >= 5) 4 else 3)
         return w.id
@@ -219,7 +251,8 @@ object ForgeGui {
 
     @JvmStatic
     fun toggle(a: List<*>): Any? {
-        val w = add("toggle", a, 1, 2, 3, 4)
+        // gui.toggle(window, x, y, label, checked)
+        val w = add("toggle", a, 1, 2, 5, 6, 120, 30)
         w.text = str(a, 3)
         w.checked = bool(a, 4)
         return w.id
@@ -227,7 +260,8 @@ object ForgeGui {
 
     @JvmStatic
     fun radio(a: List<*>): Any? {
-        val w = add("radio", a, 1, 2, 3, 4)
+        // gui.radio(window, x, y, label, group, checked)
+        val w = add("radio", a, 1, 2, 6, 7, 130, 24)
         w.text = str(a, 3)
         w.group = str(a, 4)
         w.checked = bool(a, 5)
@@ -237,6 +271,15 @@ object ForgeGui {
     @JvmStatic
     fun tabs(a: List<*>): Any? {
         val w = add("tabs", a, 1, 2, 3, 4)
+        w.items = split(str(a, 5))
+        w.selected = 0
+        return w.id
+    }
+
+    @JvmStatic
+    fun bottombar(a: List<*>): Any? {
+        // gui.bottombar(window, x, y, w, h, "Home|Search|Profile")
+        val w = add("bottombar", a, 1, 2, 3, 4)
         w.items = split(str(a, 5))
         w.selected = 0
         return w.id
@@ -254,6 +297,43 @@ object ForgeGui {
         val w = add("combo", a, 1, 2, 3, 4)
         w.items = split(str(a, 5))
         w.selected = 0
+        return w.id
+    }
+
+    @JvmStatic
+    fun search(a: List<*>): Any? {
+        val w = add("search", a, 1, 2, 3, 4)
+        w.hint = str(a, 5)
+        return w.id
+    }
+
+    @JvmStatic
+    fun segmented(a: List<*>): Any? {
+        val w = add("segmented", a, 1, 2, 3, 4)
+        w.items = split(str(a, 5))
+        w.selected = 0
+        return w.id
+    }
+
+    @JvmStatic
+    fun card(a: List<*>): Any? {
+        val w = add("card", a, 1, 2, 3, 4)
+        val parts = split(str(a, 5))
+        w.text = parts.getOrNull(0) ?: ""
+        w.hint = parts.getOrNull(1) ?: ""
+        return w.id
+    }
+
+    @JvmStatic
+    fun magnifier(a: List<*>): Any? {
+        val w = add("magnifier", a, 1, 2, 3, 4)
+        return w.id
+    }
+
+    @JvmStatic
+    fun stepper(a: List<*>): Any? {
+        val w = add("stepper", a, 1, 2, 3, 4)
+        w.value = num(a, 5).toFloat()
         return w.id
     }
 
@@ -318,6 +398,31 @@ object ForgeGui {
     @JvmStatic
     fun get_selected(a: List<*>): Any? = widget(a)?.selected ?: -1L
 
+    /** Tint a widget, e.g. "#0A84FF" for the bottom tab bar. */
+    @JvmStatic
+    fun set_tint(a: List<*>): Any? {
+        val argb = color(str(a, 1)).toArgb()
+        onUi { widget(a)?.tint = argb }
+        return null
+    }
+
+    /** Tune the glass of a widget: blur radius, lens height, dispersion. */
+    @JvmStatic
+    fun set_glass(a: List<*>): Any? {
+        val blur = num(a, 1).toFloat()
+        val lens = num(a, 2).toFloat()
+        val dispersion = bool(a, 3)
+        onUi {
+            val w = widget(a)
+            if (w != null) {
+                w.blur = blur
+                w.lens = lens
+                w.dispersion = dispersion
+            }
+        }
+        return null
+    }
+
     @JvmStatic
     fun close(a: List<*>): Any? {
         val id = lng(a, 0)
@@ -349,10 +454,25 @@ object ForgeGui {
 
     @Composable
     fun Root() {
-        val backdrop = rememberLayerBackdrop()
+        // the wallpaper is the layer the glass widgets refract
+        val wallpaper = rememberLayerBackdrop()
+        // the widgets themselves are recorded in a second layer, so a
+        // magnifier can zoom in on the widgets and not only on the
+        // wallpaper
+        val content = rememberLayerBackdrop()
+        // a magnifier must see the wallpaper *and* the widgets on top of it
+        val scene = rememberCombinedBackdrop(wallpaper, content)
         Box(Modifier.fillMaxSize()) {
-            ForgeWallpaper(Modifier.layerBackdrop(backdrop).fillMaxSize())
-            widgets.forEach { w -> WidgetNode(w, backdrop) }
+            ForgeWallpaper(Modifier.layerBackdrop(wallpaper).fillMaxSize())
+            Box(Modifier.layerBackdrop(content).fillMaxSize()) {
+                widgets.forEach { w ->
+                    if (w.kind != "magnifier") WidgetNode(w, wallpaper)
+                }
+            }
+            // magnifiers float on top and lens the whole scene
+            widgets.forEach { w ->
+                if (w.kind == "magnifier") WidgetNode(w, scene)
+            }
         }
     }
 
@@ -410,7 +530,19 @@ object ForgeGui {
                     )
                 }
 
-                "tabs" -> LiquidBottomTabs(
+                "tabs" -> LiquidTabBar(
+                    items = w.items,
+                    selectedIndex = w.selected.coerceAtLeast(0),
+                    onSelect = { i ->
+                        w.selected = i
+                        push("select", w.id, i.toString())
+                    },
+                    backdrop = backdrop,
+                    modifier = Modifier.fillMaxSize(),
+                    tint = if (w.tint != 0) Color(w.tint) else Color(0xFF0A84FF)
+                )
+
+                "draggertabs" -> LiquidBottomTabs(
                     selectedTabIndex = { w.selected },
                     onTabSelected = { i ->
                         w.selected = i
@@ -418,7 +550,29 @@ object ForgeGui {
                     },
                     backdrop = backdrop,
                     tabsCount = w.items.size.coerceAtLeast(1),
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    tint = if (w.tint != 0) Color(w.tint) else Color(0xFF0A84FF).copy(alpha = 0.55f)
+                ) {
+                    w.items.forEachIndexed { index, title ->
+                        LiquidBottomTab(onClick = {
+                            w.selected = index
+                            push("select", w.id, index.toString())
+                        }) {
+                            BasicText(title, style = TextStyle(Color.White, 12f.sp))
+                        }
+                    }
+                }
+
+                "bottombar" -> LiquidBottomTabs(
+                    selectedTabIndex = { w.selected },
+                    onTabSelected = { i ->
+                        w.selected = i
+                        push("select", w.id, i.toString())
+                    },
+                    backdrop = backdrop,
+                    tabsCount = w.items.size.coerceAtLeast(1),
+                    modifier = Modifier.fillMaxSize(),
+                    tint = if (w.tint != 0) Color(w.tint) else Color.Unspecified
                 ) {
                     w.items.forEachIndexed { index, title ->
                         LiquidBottomTab(onClick = {
@@ -435,7 +589,7 @@ object ForgeGui {
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8f.dp)
                 ) {
-                    GlassBox(backdrop, Modifier.size(22f.dp), 11f.dp) {
+                    GlassBox(backdrop, w, Modifier.size(22f.dp), 11f.dp) {
                         if (w.checked) {
                             Box(
                                 Modifier
@@ -454,7 +608,7 @@ object ForgeGui {
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8f.dp)
                 ) {
-                    GlassBox(backdrop, Modifier.size(22f.dp), 11f.dp) {
+                    GlassBox(backdrop, w, Modifier.size(22f.dp), 11f.dp) {
                         if (w.checked) {
                             Box(
                                 Modifier
@@ -474,7 +628,7 @@ object ForgeGui {
                     style = TextStyle(Color.White, 14f.sp)
                 )
 
-                "textfield" -> GlassBox(backdrop, Modifier.fillMaxSize(), 14f.dp) {
+                "textfield" -> GlassBox(backdrop, w, Modifier.fillMaxSize(), 14f.dp) {
                     BasicTextField(
                         value = w.text,
                         onValueChange = {
@@ -489,7 +643,7 @@ object ForgeGui {
                     )
                 }
 
-                "progress" -> GlassBox(backdrop, Modifier.fillMaxSize(), 14f.dp) {
+                "progress" -> GlassBox(backdrop, w, Modifier.fillMaxSize(), 14f.dp) {
                     val fraction by animateFloatAsState(
                         targetValue = w.value.coerceIn(0f, 1f),
                         label = "progress"
@@ -517,7 +671,7 @@ object ForgeGui {
                     )
                 }
 
-                "gauge" -> GlassBox(backdrop, Modifier.fillMaxSize(), 16f.dp) {
+                "gauge" -> LiquidDisc(backdrop, Modifier.fillMaxSize()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
                             val stroke = Stroke(width = 10f.dp.toPx())
@@ -526,24 +680,49 @@ object ForgeGui {
                                 (size.width - diameter) / 2f,
                                 (size.height - diameter) / 2f
                             )
+                            val arcSize = androidx.compose.ui.geometry.Size(diameter, diameter)
                             drawArc(
                                 color = Color.White.copy(alpha = 0.15f),
                                 startAngle = 135f,
                                 sweepAngle = 270f,
                                 useCenter = false,
                                 topLeft = topLeft,
-                                size = androidx.compose.ui.geometry.Size(diameter, diameter),
+                                size = arcSize,
                                 style = stroke
                             )
+                            val sweep = 270f * w.value.coerceIn(0f, 1f)
                             drawArc(
-                                color = Color(0xFF30D158),
+                                brush = androidx.compose.ui.graphics.Brush.sweepGradient(
+                                    listOf(
+                                        Color(0xFF30D158),
+                                        Color(0xFF0A84FF),
+                                        Color(0xFF30D158)
+                                    )
+                                ),
                                 startAngle = 135f,
-                                sweepAngle = 270f * w.value.coerceIn(0f, 1f),
+                                sweepAngle = sweep,
                                 useCenter = false,
                                 topLeft = topLeft,
-                                size = androidx.compose.ui.geometry.Size(diameter, diameter),
+                                size = arcSize,
                                 style = stroke
                             )
+                            // glowing knob at the head of the arc
+                            val angle = Math.toRadians((135.0 + sweep).toDouble())
+                            val radius = diameter / 2f
+                            val knob = androidx.compose.ui.geometry.Offset(
+                                topLeft.x + radius + cos(angle).toFloat() * radius,
+                                topLeft.y + radius + sin(angle).toFloat() * radius
+                            )
+                            drawCircle(
+                                brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                                    listOf(Color.White, Color(0xFF30D158).copy(alpha = 0.0f)),
+                                    center = knob,
+                                    radius = 14f.dp.toPx()
+                                ),
+                                radius = 14f.dp.toPx(),
+                                center = knob
+                            )
+                            drawCircle(Color.White, radius = 4.5f.dp.toPx(), center = knob)
                         }
                         BasicText(
                             w.text.ifEmpty { "${(w.value * 100).roundToInt()}%" },
@@ -552,7 +731,7 @@ object ForgeGui {
                     }
                 }
 
-                "list" -> GlassBox(backdrop, Modifier.fillMaxSize(), 16f.dp) {
+                "list" -> GlassBox(backdrop, w, Modifier.fillMaxSize(), 16f.dp) {
                     Column(
                         Modifier
                             .fillMaxSize()
@@ -574,7 +753,7 @@ object ForgeGui {
                     }
                 }
 
-                "combo" -> GlassBox(backdrop, Modifier.fillMaxSize(), 14f.dp) {
+                "combo" -> GlassBox(backdrop, w, Modifier.fillMaxSize(), 14f.dp) {
                     Row(
                         Modifier
                             .fillMaxSize()
@@ -597,7 +776,55 @@ object ForgeGui {
                     }
                 }
 
-                "panel" -> GlassBox(backdrop, Modifier.fillMaxSize(), 20f.dp) {}
+                "panel" -> GlassBox(backdrop, w, Modifier.fillMaxSize(), 20f.dp) {}
+
+                "search" -> LiquidSearchField(
+                    value = w.text,
+                    onValueChange = {
+                        w.text = it
+                        push("text", w.id, it)
+                    },
+                    placeholder = w.hint,
+                    backdrop = backdrop,
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                "segmented" -> LiquidSegmented(
+                    items = w.items,
+                    selectedIndex = w.selected.coerceAtLeast(0),
+                    onSelect = { i ->
+                        w.selected = i
+                        push("select", w.id, i.toString())
+                    },
+                    backdrop = backdrop,
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                "card" -> LiquidCard(
+                    title = w.text,
+                    body = w.hint,
+                    backdrop = backdrop,
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                "stepper" -> LiquidStepper(
+                    value = w.value.toInt(),
+                    onChange = { v ->
+                        w.value = v.toFloat()
+                        push("change", w.id, v.toString())
+                    },
+                    backdrop = backdrop,
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                "magnifier" -> LiquidMagnifier(
+                    backdrop = backdrop,
+                    modifier = Modifier.fillMaxSize(),
+                    onDrag = { dx, dy ->
+                        w.x += dx.roundToInt()
+                        w.y += dy.roundToInt()
+                    }
+                )
 
                 else -> BasicText(w.text, style = TextStyle(Color.White, 14f.sp))
             }
@@ -608,24 +835,18 @@ object ForgeGui {
     @Composable
     private fun GlassBox(
         backdrop: Backdrop,
+        w: ForgeWidget,
         modifier: Modifier,
         radius: androidx.compose.ui.unit.Dp,
         content: @Composable () -> Unit
     ) {
-        Box(
-            modifier
-                .drawBackdrop(
-                    backdrop = backdrop,
-                    shape = { RoundedCornerShape(radius) },
-                    effects = {
-                        vibrancy()
-                        blur(6f.dp.toPx())
-                        lens(10f.dp.toPx(), 20f.dp.toPx())
-                    },
-                    onDrawSurface = {
-                        drawRect(Color.White.copy(alpha = 0.10f))
-                    }
-                ),
+        LiquidSurface(
+            backdrop = backdrop,
+            modifier = modifier,
+            radius = radius,
+            blurRadius = w.blur.dp,
+            lensHeight = w.lens.dp,
+            dispersion = w.dispersion,
             content = { content() }
         )
     }

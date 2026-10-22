@@ -22,6 +22,7 @@ inline const char* TPL_themes_xml = R"JAVA(@ANDROID_TPL_themes_xml@)JAVA";
 inline const char* TPL_ForgeGui_kt = R"JAVA(@ANDROID_TPL_ForgeGui_kt@)JAVA";
 inline const char* TPL_MainActivity_kt = R"JAVA(@ANDROID_TPL_MainActivity_kt@)JAVA";
 inline const char* TPL_ForgeWallpaper_kt = R"JAVA(@ANDROID_TPL_ForgeWallpaper_kt@)JAVA";
+inline const char* TPL_LiquidWidgets_kt = R"JAVA(@ANDROID_TPL_LiquidWidgets_kt@)JAVA";
 inline const char* TPL_LiquidButton_kt = R"JAVA(@ANDROID_TPL_LiquidButton_kt@)JAVA";
 inline const char* TPL_LiquidToggle_kt = R"JAVA(@ANDROID_TPL_LiquidToggle_kt@)JAVA";
 inline const char* TPL_LiquidSlider_kt = R"JAVA(@ANDROID_TPL_LiquidSlider_kt@)JAVA";

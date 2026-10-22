@@ -196,6 +196,7 @@ int cmdNew(const std::string& dir, const std::string& packageName,
     writeTemplate(srcDir / "ForgeGui.kt", TPL_ForgeGui_kt, packageName, appName);
     writeTemplate(srcDir / "MainActivity.kt", TPL_MainActivity_kt, packageName, appName);
     writeTemplate(srcDir / "ForgeWallpaper.kt", TPL_ForgeWallpaper_kt, packageName, appName);
+    writeTemplate(srcDir / "LiquidWidgets.kt", TPL_LiquidWidgets_kt, packageName, appName);
     writeTemplate(srcDir / "LiquidButton.kt", TPL_LiquidButton_kt, packageName, appName);
     writeTemplate(srcDir / "LiquidToggle.kt", TPL_LiquidToggle_kt, packageName, appName);
     writeTemplate(srcDir / "LiquidSlider.kt", TPL_LiquidSlider_kt, packageName, appName);

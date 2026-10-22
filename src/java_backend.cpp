@@ -907,10 +907,11 @@ R"JAVA(    // ================= Forge Runtime (R) =================
             // backed by the liquid glass library) or a no-op stub on the JVM.
             static const char* kGuiFns[] = {
                 "window", "button", "label", "textfield", "checkbox", "progress",
-                "panel", "slider", "gauge", "toggle", "radio", "tabs", "list",
-                "combo", "set_text", "get_text", "set_checked", "set_progress",
+                "panel", "slider", "gauge", "toggle", "radio", "tabs", "list", "bottombar",
+                "combo", "search", "segmented", "card", "magnifier", "stepper",
+                "set_text", "get_text", "set_checked", "set_progress",
                 "set_value", "get_value", "set_items", "select", "get_selected",
-                "close", "tick", "poll", "screenshot",
+                "set_glass", "set_tint", "close", "tick", "poll", "screenshot",
             };
             for (const char* g : kGuiFns)
                 if (fn == g) return "(a) -> ForgeGui." + fn + "(a)";
