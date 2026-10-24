@@ -11,3 +11,4 @@ compile_commands.json
 .opencode/
 assets/*.bmp
 models/*.gguf
+build-release/

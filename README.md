@@ -1,623 +1,72 @@
-# Forge Programming Language
+# Forge
 
-<p align="center">
-  <img src="assets/forge-icon.png" alt="Forge Logo" width="200"/>
-</p>
+Forge is a language + toolchain (lexer/parser/compiler/VM + FVM) with a C API for embedding and exporting Forge programs to native binaries and shared libraries.
 
-<p align="center">
-  <strong>A modern, expressive programming language that compiles to bytecode and runs on a stack-based VM.</strong>
-</p>
-
-<p align="center">
-  <a href="#features">Features</a> •
-  <a href="#installation">Installation</a> •
-  <a href="#quick-start">Quick Start</a> •
-  <a href="#syntax-guide">Syntax Guide</a> •
-  <a href="#standard-library">Standard Library</a> •
-  <a href="#tools">Tools</a> •
-  <a href="#contributing">Contributing</a>
-</p>
-
----
-
-## Features
-
-| Feature | Description |
-|---------|-------------|
-| **Clean Syntax** | Familiar, readable, with modern ergonomics |
-| **Bytecode VM** | Fast stack-based execution, JIT-ready architecture |
-| **Compile to Bytecode** | `forgevm compile` produces `.fclass` binaries — load and run them with `forgevm` |
-| **Rich Types** | Integers, floats, strings, arrays, maps, classes, closures |
-| **Pattern Matching** | Powerful match expressions with guards and destructuring |
-| **Generators** | `yield`-based coroutines with eager evaluation |
-| **Modules** | Import system with stdlib (io, os, json, path, system) |
-| **REPL** | Interactive mode with auto-print and history |
-| **SDL2 IDE** | Full graphical IDE with editor, REPL, file browser, and debugger |
-| **Package Manager** | `forge pkg install <name>` with community registry |
-| **Tools** | Formatter, linter, debugger included |
-| **Compute Module** | Cross-platform GPU compute (HIP/ROCm, CUDA, SYCL) via `import "compute"` |
-| **Cross-Platform** | Linux (all distros), Windows, macOS |
-| **BUILT-IN ANDROID SDK** |  the real android sdk wrapped with gradle contains some templates to start and fully compatible to work with 
----
-
----
-## notes
-
-| **must be preinstalled GRADLE before using our language to compose your project**
-| **the built-in android feature estimated only for sdk's of (35-36-37) most likely the newer version that supports blur effect's (**advanced textures**)**|
-| **wrapped android templates that sticks to your project contains a basic liquid glass effect for SDK 36-37 (buttons,toggles,sliders,bottom tabs) with tinting support**|
-| **i taken some liquid glass files from creatator KYANT0 of his repository https://github.com/Kyant0/AndroidLiquidGlass**|  
-
----
-
-## Installation
-
-### Linux (Universal)
+## Quick start
 
 ```bash
-# download and run
-wget https://github.com/forge-lang/forge/releases/latest/download/install_linux.sh
-chmod +x install_linux.sh
-./install_linux.sh
+cmake -B build-release -DCMAKE_BUILD_TYPE=Release
+cmake --build build-release --target forgevm -j4
+
+./build-release/forgevm examples/simple.fge
+./build-release/forgevm  # REPL
 ```
 
-**Per-distro packages:**
-| Distro | Command |
-|--------|---------|
-| Debian/Ubuntu | `sudo dpkg -i forge-lang_1.0.0_amd64.deb` |
-| Fedora/RHEL | `sudo rpm -i forge-lang-1.0.0-1.x86_64.rpm` |
-| Arch | `sudo pacman -U forge-lang-1.0.0-1-x86_64.pkg.tar.zst` |
-| Alpine | `sudo apk add forge-lang-1.0.0-r1.apk` |
-| openSUSE | `sudo zypper install forge-lang-1.0.0-1.x86_64.rpm` |
+## Build from `ForgeLists.txt`
 
-### Windows
-
-Download the installer: [forge-1.0.0-windows-x64.exe](https://github.com/forge-lang/forge/releases/latest/download/forge-1.0.0-windows-x64.exe)
-
-### macOS
+```text
+project(MyApp)
+version(1.0.0)
+source(src)
+output(myapp)
+arch(x64)
+```
 
 ```bash
-brew tap forge-lang/forge
-brew install forge
+forgevm build                # standalone binary
+forgevm build --shared       # shared library with C ABI
 ```
 
-### From Source
+## Export Forge to C/C++
+
+A `shared(true)` project generates `libname.so` + `libname.so.h` with a C ABI (`forge_lib_init`, `forge_lib_call_selected_*`, `forge_lib_select`, etc.). C++ programs can call them directly; Forge can load them via `ffi` with `--trusted`.
+
+See [`docs/SDK_GUIDE.md`](docs/SDK_GUIDE.md) for verified syntax, CLI, FFI, native libraries, Android liquid-glass GUI, LSP/VS Code, and `.fclass` decompilation.
+
+## Native libraries (C/C++ interop)
 
 ```bash
-git clone https://github.com/Nohat1337/FORGE.git
-cd forge
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
-sudo make install
+forgevm lib new mylib --cpp   # scaffold C++ library (classes/templates behind extern "C")
+cd mylib && sh build.sh
+forgevm --trusted main.fge
 ```
 
----
-
-## Quick Start
+## Android apps
 
 ```bash
-# Start REPL
-forge
-
-# Run a file
-forge hello.fge
-
-# Compile to bytecode
-forgevm compile hello.fge hello.fclass
-
-# Run compiled bytecode
-forgevm hello.fclass
-
-# Open SDL2 IDE
-forge --ide
-
-# Package manager
-forge pkg update
-forge pkg install stdlib
-
-# Cross-platform GPU compute
-import "compute"
-let ctx = compute.create()
+forgevm android new ./myapp --package com.example.myapp
+forgevm android build ./myapp
+forgevm android install ./myapp
+forgevm android run ./myapp
 ```
-
-### Hello World
-
-```forge
-// hello.fge
-print("Hello, Forge!")
-
-// Variables
-let name = "World"
-const PI = 3.14159
-
-// Functions
-fn greet(person) {
-    return "Hello, " + person + "!"
-}
-
-print(greet(name))
-
-// Collections
-let numbers = [1, 2, 3, 4, 5]
-let user = { "name": "Alice", "age": 30, "active": true }
-
-// Loops
-for (let n in numbers) {
-    print(n * 2)
-}
-
-// Match expression
-let result = match numbers[0] {
-    case 1: "one"
-    case 2: "two"
-    case _: "other"
-}
-```
-
----
-
-## Syntax Guide
-
-### Variables
-
-```forge
-let mutable = 10          // Mutable binding
-const IMMUTABLE = 20      // Immutable (compile-time constant)
-let x: int = 5            // Type annotation (optional, for documentation)
-```
-
-### Functions
-
-```forge
-fn add(a, b) {
-    return a + b
-}
-
-// Implicit return (last expression)
-fn multiply(a, b) {
-    a * b
-}
-
-// Arrow functions (closures)
-let double = fn(x) => x * 2
-
-// Default parameters
-fn greet(name = "World") {
-    "Hello, " + name + "!"
-}
-```
-
-### Control Flow
-
-```forge
-// If/else (expression)
-let max = if (a > b) a else b
-
-// Match expression
-let description = match value {
-    case 0: "zero"
-    case 1: "one"
-    case n if n > 10: "big"
-    case [a, b]: "pair of " + str(a) + " and " + str(b)
-    case { "error": msg }: "Error: " + msg
-    case _: "unknown"
-}
-
-// Loops
-for (let i = 0; i < 10; i = i + 1) { ... }
-while (condition) { ... }
-for (let item in collection) { ... }  // arrays, maps (keys), generators
-```
-
-### Classes & Inheritance
-
-```forge
-class Animal {
-    fn init(name) {
-        this.name = name
-    }
-    
-    fn speak() {
-        print(this.name + " makes a sound")
-    }
-}
-
-class Dog extends Animal {
-    fn init(name, breed) {
-        super.init(name)
-        this.breed = breed
-    }
-    
-    fn speak() {
-        print(this.name + " says: Woof! (" + this.breed + ")")
-    }
-}
-
-let dog = Dog("Rex", "German Shepherd")
-dog.speak()
-```
-
-### Generators
-
-```forge
-gen fibonacci() {
-    let a = 0, b = 1
-    while (true) {
-        yield a
-        let tmp = a
-        a = b
-        b = tmp + b
-    }
-}
-
-for (let n in fibonacci()) {
-    if (n > 100) break
-    print(n)
-}
-```
-
-### Error Handling
-
-```forge
-try {
-    let result = risky_operation()
-    print(result)
-} catch (e) {
-    print("Error: " + e)
-} finally {
-    cleanup()
-}
-
-// Throw custom errors
-throw "Something went wrong"
-throw { "code": 404, "message": "Not found" }
-```
-
-### Modules
-
-```forge
-import "io"
-import "os" as system
-import { read, write } from "io"
-
-let content = io.read("file.txt")
-system.execute("ls -la")
-```
-
----
-
-## Standard Library
-
-### `io` — File I/O
-```forge
-io.read(path)           // Read entire file as string
-io.write(path, content) // Write string to file
-io.readLines(path)      // Read file as array of lines
-io.exists(path)         // Check if file exists
-io.println(path, line)  // Append line to file
-```
-
-### `os` — Operating System
-```forge
-os.execute(cmd)         // Run shell command, return output
-os.env(key)             // Get environment variable
-os.setEnv(key, value)   // Set environment variable
-os.cwd()                // Current working directory
-os.args()               // Command-line arguments array
-os.time()               // Unix timestamp (ms)
-os.sleep(ms)            // Sleep for milliseconds
-```
-
-### `json` — JSON Parsing
-```forge
-json.parse(str)         // Parse JSON string to Forge value
-json.stringify(obj)     // Convert Forge value to JSON string
-```
-
-### `path` — Path Manipulation
-```forge
-path.join(...parts)     // Join path segments
-path.base(path)         // Get filename
-path.dir(path)          // Get directory
-path.ext(path)          // Get extension
-path.abs(path)          // Absolute path
-```
-
-### `system` — System Info
-```forge
-system.memory()         // Memory usage map
-system.version()        // Forge version string
-system.platform()       // "linux", "windows", "darwin"
-```
-
-### Built-in Functions
-```forge
-print(...args)          // Print to stdout
-len(collection)         // Length of string/array/map
-str(value)              // Convert to string
-type(value)             // Type name as string
-abs(n)                  // Absolute value
-min(a, b), max(a, b)    // Min/max
-sqrt(n), pow(a, b)      // Square root, power
-floor(n), ceil(n)       // Floor/ceiling
-round(n)                // Round to nearest
-random()                // Random float 0-1
-randomInt(min, max)     // Random integer in range
-```
-
-### String Methods
-```forge
-"hello".upper()         // "HELLO"
-"HELLO".lower()         // "hello"
-"  hi  ".trim()         // "hi"
-"a,b,c".split(",")      // ["a", "b", "c"]
-"hello".contains("ell") // true
-"hello".replace("l", "x") // "hexxo"
-"hello".substring(1, 4) // "ell"
-"hello".charAt(0)       // "h"
-"42".parseInt()         // 42
-"3.14".toFloat()        // 3.14
-```
-
-### Map Functions
-```forge
-{ "a": 1 }.keys()       // ["a"]
-{ "a": 1 }.values()     // [1]
-{ "a": 1 }.entries()    // [["a", 1]]
-{ "a": 1 }.has("a")     // true
-{ "a": 1 }.clone()      // Copy
-```
-
----
-
-## Compute Module (Cross-Platform GPU Compute)
-
-The `compute` module provides cross-platform GPU compute capabilities with automatic backend selection (HIP/ROCm for AMD, CUDA for NVIDIA, SYCL for Intel, CPU fallback).
-
-```bash
-# Build with ROCm support (AMD GPUs)
-cmake .. -DFORGE_WITH_ROCM=ON
-```
-
-```forge
-import "compute"
-
-// Create compute context (auto-selects best backend)
-let ctx = compute.create()
-
-// Get backend name
-print(compute.backend_name(1))  // "HIP"
-print(compute.backend_name(6))  // "CPU"
-
-// Create tensors (on GPU if available)
-let a = compute.tensor([1.0, 2.0, 3.0, 4.0], [2, 2])
-let b = compute.tensor([2.0, 3.0, 4.0, 5.0], [2, 2])
-
-// Matrix multiplication
-let c = compute.matmul(a, b)
-
-// Element-wise operations
-let d = compute.add(a, b)
-let e = compute.mul(a, b)
-
-// Copy result back to host
-let result = compute.to_host(c)
-print(result)  // [[7, 10], [15, 22]]
-
-// Element-wise activation functions
-let activated = compute.gelu(d)
-
-// Reduction operations
-let sum = compute.sum(a)  // scalar
-let max_val = compute.max(a)
-```
-
-**Supported Operations:**
-| Category | Operations |
-|----------|------------|
-| Element-wise | ADD, SUB, MUL, DIV, ABS, NEG, SQRT, EXP, LOG, SIN, COS, TANH, SIGMOID, GELU, SILU, RELU, LEAKY_RELU |
-| Comparison | EQ, NE, LT, LE, GT, GE, LOGICAL_AND, LOGICAL_OR, LOGICAL_NOT |
-| Reduction | SUM, MEAN, MAX, MIN, ARGMAX, ARGMIN |
-| Matrix | MATMUL, BATCH_MATMUL, TRANSPOSE, RESHAPE |
-| Tensor | CONCAT, SPLIT, STACK, UNSTACK, SLICE, STRIDED_SLICE, GATHER, SCATTER |
-| Convolution | CONV2D, CONV2D_TRANSPOSE, DEPTHWISE_CONV2D |
-| Pooling | MAX_POOL2D, AVG_POOL2D, ADAPTIVE_POOL2D |
-| Normalization | BATCH_NORM, LAYER_NORM, GROUP_NORM, INSTANCE_NORM |
-| Attention | SCALED_DOT_PRODUCT_ATTENTION, MULTI_HEAD_ATTENTION |
-| Loss | CROSS_ENTROPY, MSE, BCE |
-
-**Backend Support:**
-| Backend | Vendor | Status |
-|---------|--------|--------|
-| HIP/ROCm | AMD | ✅ Primary |
-| CUDA | NVIDIA | 🔧 Planned |
-| SYCL/OneAPI | Intel | 🔧 Planned |
-| Metal | Apple | 🔧 Planned |
-| Vulkan | Cross-platform | 🔧 Planned |
-| CPU | Any | ✅ Fallback |
-
-**Building with ROCm (AMD):**
-```bash
-# Install ROCm
-sudo apt install rocm-dev
-
-# Build with ROCm
-cmake .. -DFORGE_WITH_ROCM=ON
-make -j$(nproc)
-```
-
----
 
 ## Tools
 
-### Formatter
-```bash
-forge-format file.fge           # Check formatting
-forge-format --write file.fge   # Format in place
-```
+- `forgevm` — FVM runtime/compiler/build/FFI/lib/android
+- `forge` — interpreter
+- `forge-lsp` — Language Server (completion/hover/diagnostics/definition/references)
+- `tools/forge-decompiler` / `tools/fclass-decompile` — `.fclass` decompilation with binary hash matching
+- `editors/vscode/` — VS Code extension for Forge
 
-### Linter
-```bash
-forge-lint file.fge             # Lint single file
-forge-lint src/                 # Lint directory
-```
+## Repository layout
 
-### Debugger
-```bash
-forge-debug file.fge                    # Run with debugger
-forge-debug --breakpoint file.fge:10    # Break at line 10
-forge-debug --step file.fge             # Step through
-```
+- `src/` — compiler, VM/FVM runtime, modules, Android/LSP/tooling
+- `examples/`, `tests/` — samples and tests
+- `docs/SDK_GUIDE.md` — practical SDK documentation
+- `GUIDE.md` — broader user guide
+- `editors/vscode/` — VS Code extension
+- `tools/` — utilities and LSP
 
-**Debug commands:** `s` (step), `n` (next), `c` (continue), `p expr` (print), `b file:line` (breakpoint), `w var` (watch), `l` (locals), `h` (help), `q` (quit)
+## Commit notes
 
-### IDE
-```bash
-forge --ide                  # Open SDL2 IDE in current directory
-forgevm --ide                # Same via forgevm
-```
-
-**Keybindings:**
-- `Ctrl+S` — Save
-- `Ctrl+N` — New file
-- `Ctrl+O` — Open file
-- `F5` — Toggle REPL
-- `F9` — Run file
-- `Ctrl+Z` / `Ctrl+Y` — Undo/Redo
-- `Ctrl+Q` — Quit
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Source (.fge)                        │
-└──────────────────────┬──────────────────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────────────────┐
-│  Lexer ──► Parser ──► AST ──► Compiler ──► Bytecode     │
-└──────────────────────┬──────────────────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────────────────┐
-│              Stack-Based Virtual Machine                │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐               │
-│  │  Stack   │  │  Frames  │  │  Globals │               │
-│  └──────────┘  └──────────┘  └──────────┘               │
-└──────────────────────┬──────────────────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────────────────┐
-│        .fclass Bytecode ──► forgevm loader              │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐               │
-│  │  CP      │  │ Methods  │  │  Code    │               │
-│  └──────────┘  └──────────┘  └──────────┘               │
-└─────────────────────────────────────────────────────────┘
-```
-
-- **OpCodes**: 60+ instructions for all language features
-- **Memory**: Stack + heap with GC-ready object model
-- **Calls**: Closure-based with upvalue capture
-- **Types**: Tagged union (nil, bool, int, float, obj)
-- **.fclass Format**: Binary bytecode with constant pool, methods, and code attributes
-
----
-
-## Project Structure
-
-```
-forge/
-├── src/                    # Core VM & Compiler
-│   ├── main.cpp           # forge CLI entry point
-│   ├── forgevm_main.cpp   # forgevm CLI entry point (compile/run)
-│   ├── lexer.*            # Tokenizer
-│   ├── parser.*           # Recursive descent parser
-│   ├── compiler.*         # AST → Bytecode
-│   ├── vm.*               # Original stack VM
-│   ├── chunk.*            # Bytecode container
-│   ├── value.*            # Value system
-│   ├── ast.*              # AST nodes
-│   ├── pkg_manager.cpp    # Package manager (forge pkg)
-│   └── fvm/               # Forge Virtual Machine (FVM)
-│       ├── runtime.*      # FVM interpreter + classfile loader
-│       ├── classfile.*    # .fclass binary format (load/save)
-│       ├── sdl2_ui.*      # SDL2 windowed UI primitives
-│       ├── sdl_fvm_ui.cpp # Default FVM window (Forge logo)
-│       └── forge_ide.*    # SDL2 IDE (editor, REPL, file browser)
-├── tools/                 # Developer tools
-│   ├── format.cpp         # Code formatter
-│   ├── linter.cpp         # Static analysis
-│   └── forge-debug.cpp    # Debugger
-├── ide/                   # Legacy IDE directory (unused)
-├── examples/              # Example programs
-├── packages/              # Package registry (registry.json)
-├── assets/                # Icons, logos
-├── GUIDE.md               # Comprehensive user guide
-├── .github/workflows/     # CI/CD pipeline
-│   └── ci.yml
-├── build_linux_package.sh # Linux packager
-├── forge_installer.nsi    # Windows installer
-└── CMakeLists.txt         # Build system
-```
-
----
-
-## Roadmap
-
-- [x] **Bytecode Compiler** — Source → .fclass bytecode
-- [x] **Forge VM (FVM)** — Production VM with GC, threading, FFI
-- [x] **SDL2 UI** — Cross-platform windowed UI layer
-- [x] **SDL2 IDE** — Full graphical IDE (editor, REPL, file browser)
-- [x] **Package Manager** — `forge pkg` with community registry
-- [x] **Compile & Run** — `forgevm compile` + `forgevm <file.fclass>`
-- [x] **JIT Compiler** — LLVM backend for hot paths
-- [x] **LSP Server** — Full IDE support (VS Code, Neovim)
-- [x] **WASM Target** — Run Forge in browsers
-- [x] **FFI** — Native C function calls
-- [ ] **Gradual Typing** — Optional static type checking
-- [ ] **Concurrency** — Actor model / channels
-
----
-
-## Contributing
-
-```bash
-# 1. Fork & clone
-git clone https://github.com/yourname/forge
-cd forge
-
-# 2. Create feature branch
-git checkout -b feature/amazing-feature
-
-# 3. Build & test
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Debug
-make -j$(nproc)
-../forge ../examples/test_all.fge
-
-# 4. Commit & push
-git commit -m "feat: amazing feature"
-git push origin feature/amazing-feature
-
-# 5. Open PR
-```
-
-### Code Style
-- 4-space indentation
-- Clang-format (config in repo)
-- Meaningful commit messages (conventional commits)
-
----
-
-## License
-
-MIT License — see [LICENSE](LICENSE) for details.
-
----
-
-<p align="center">
-  Made by nohat1337 - NH
-</p>
-<p align="center">
-  <img src="assets/forge-icon.png" alt="Forge" width="100"/>
-</p>
+Stage source/docs only; leave `build-release/` (and `brag-output/`) unstaged.

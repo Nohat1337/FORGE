@@ -97,6 +97,12 @@ class LspClient {
         const id = this.nextId++;
         const promise = new Promise((resolve, reject) => {
             this.pending.set(id, { resolve, reject });
+            setTimeout(() => {
+                if (this.pending.has(id)) {
+                    this.pending.delete(id);
+                    reject(new Error(`LSP request timeout: ${method}`));
+                }
+            }, 10000);
         });
         this.process.stdin.write(encodeMessage({ jsonrpc: '2.0', id, method, params }));
         return promise;
