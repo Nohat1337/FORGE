@@ -1,0 +1,158 @@
+# Windows-only CMakeLists for building Forge/FVM/LSP/decompilers on Windows 10 IoT LTSC 2021
+# Usage:
+#   cmake -B build-win -S . -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE=[vcpkg]/scripts/buildsystems/vcpkg.cmake -DFORGE_WINDOWS=ON -P CMakeLists.windows.txt  (or just configure)
+#   cmake --build build-win --config Release
+
+cmake_minimum_required(VERSION 3.20)
+project(forge_windows LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+option(FORGE_WITH_LSP "Enable Language Server Protocol" ON)
+
+if(NOT DEFINED FORGE_ROOT_DIR)
+    set(FORGE_ROOT_DIR ${CMAKE_SOURCE_DIR})
+endif()
+
+add_compile_definitions(_CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+
+# Common Forge runtime sources (no Linux-only assumptions where possible)
+set(FORGE_COMMON
+    src/lexer.cpp
+    src/parser.cpp
+    src/value.cpp
+    src/chunk.cpp
+    src/compiler.cpp
+    src/optimizer.cpp
+    src/fvm/runtime.cpp
+    src/fvm/classfile.cpp
+    src/fvm/sdl2_ui.cpp
+    src/fvm/liquid_glass.cpp
+    src/fvm/gui_kit.cpp
+    src/fvm/sdl_fvm_ui.cpp
+    src/fvm/forge_ide.cpp
+    src/fvm/ffi.cpp
+    src/fvm/actors.cpp
+    src/fvm/llm.cpp
+    src/fvm/gguf_loader.cpp
+    src/fvm/faw.cpp
+    src/fvm/forge_compute.cpp
+    src/fvm/hf_converter.cpp
+    src/fvm/forge_export.cpp
+    src/pkg_manager.cpp
+    src/java_backend.cpp
+    src/lib_cmd.cpp
+    src/android_cmd.cpp
+)
+
+# Android templates embedding
+set(ANDROID_TPL_DIR ${CMAKE_SOURCE_DIR}/src/android_templates)
+file(GLOB ANDROID_TPL_FILES
+    ${ANDROID_TPL_DIR}/*.java ${ANDROID_TPL_DIR}/*.kt ${ANDROID_TPL_DIR}/*.xml
+    ${ANDROID_TPL_DIR}/*.kts ${ANDROID_TPL_DIR}/*.properties
+    ${ANDROID_TPL_DIR}/res/values/*.xml)
+foreach(_f ${ANDROID_TPL_FILES})
+    file(READ ${_f} _content)
+    get_filename_component(_base ${_f} NAME)
+    string(MAKE_C_IDENTIFIER ${_base} _ident)
+    set(ANDROID_TPL_${_ident} "${_content}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_f})
+endforeach()
+configure_file(src/android_templates.h.in ${CMAKE_BINARY_DIR}/generated/android_templates.h @ONLY)
+include_directories(${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_DIR}/generated)
+
+# Try to find SDL2 (vcpkg or system)
+find_package(SDL2 QUIET)
+if(SDL2_FOUND)
+    include_directories(${SDL2_INCLUDE_DIRS})
+else()
+    find_path(SDL2_INCLUDE_DIR SDL.h PATH_SUFFIXES SDL2)
+    find_library(SDL2_LIBRARY NAMES SDL2)
+    if(SDL2_INCLUDE_DIR AND SDL2_LIBRARY)
+        include_directories(${SDL2_INCLUDE_DIR})
+    endif()
+endif()
+
+# forgevm
+add_executable(forgevm
+    src/forgevm_main.cpp
+    ${FORGE_COMMON}
+    src/forge_build.cpp
+)
+target_compile_definitions(forgevm PRIVATE FVM_BUILD FORGE_ROOT_DIR="${CMAKE_SOURCE_DIR}")
+
+# forge interpreter
+add_executable(forge
+    src/main.cpp
+    ${FORGE_COMMON}
+)
+target_compile_definitions(forge PRIVATE FORGE_ROOT_DIR="${CMAKE_SOURCE_DIR}")
+
+# forge_core static
+add_library(forge_core STATIC ${FORGE_COMMON})
+
+if(SDL2_FOUND)
+    target_link_libraries(forgevm PRIVATE ${SDL2_LIBRARIES})
+    target_link_libraries(forge PRIVATE ${SDL2_LIBRARIES})
+    target_link_libraries(forge_core PRIVATE ${SDL2_LIBRARIES})
+elseif(SDL2_LIBRARY)
+    target_link_libraries(forgevm PRIVATE ${SDL2_LIBRARY})
+    target_link_libraries(forge PRIVATE ${SDL2_LIBRARY})
+    target_link_libraries(forge_core PRIVATE ${SDL2_LIBRARY})
+endif()
+
+# Windows libs
+if(WIN32)
+    target_link_libraries(forgevm PRIVATE ws2_32)
+    target_link_libraries(forge PRIVATE ws2_32)
+    target_link_libraries(forge_core PRIVATE ws2_32)
+endif()
+
+# forge-lsp
+if(FORGE_WITH_LSP)
+    add_executable(forge-lsp
+        src/lsp/forge_lsp_main.cpp
+        src/lsp/forge_lsp.cpp
+        src/lexer.cpp
+        src/parser.cpp
+        src/value.cpp
+        src/chunk.cpp
+        src/compiler.cpp
+        src/optimizer.cpp
+    )
+    target_include_directories(forge-lsp PRIVATE src)
+endif()
+
+# Decompilers (pure C++)
+add_executable(forge-decompiler
+    tools/forge_decompiler.cpp
+    src/fvm/classfile.cpp
+)
+target_include_directories(forge-decompiler PRIVATE . src)
+
+add_executable(fclass-decompile
+    tools/fclass_decompile.cpp
+    src/fvm/classfile.cpp
+)
+target_include_directories(fclass-decompile PRIVATE . src)
+
+add_executable(fclass-structurer
+    tools/fclass_structurer.cpp
+    src/fvm/classfile.cpp
+)
+target_include_directories(fclass-structurer PRIVATE . src)
+
+# Tools
+add_executable(forge-format tools/format.cpp src/lexer.cpp src/parser.cpp src/value.cpp src/chunk.cpp src/compiler.cpp src/optimizer.cpp)
+add_executable(forge-lint tools/linter.cpp src/lexer.cpp src/parser.cpp src/value.cpp src/chunk.cpp src/compiler.cpp src/optimizer.cpp)
+add_executable(forge-debug tools/forge-debug.cpp src/lexer.cpp src/parser.cpp src/value.cpp src/chunk.cpp src/compiler.cpp src/optimizer.cpp src/vm.cpp)
+target_include_directories(forge-format PRIVATE src)
+target_include_directories(forge-lint PRIVATE src)
+target_include_directories(forge-debug PRIVATE src)
+
+install(TARGETS forge forgevm forge_core RUNTIME DESTINATION bin ARCHIVE DESTINATION lib)
+if(FORGE_WITH_LSP)
+    install(TARGETS forge-lsp RUNTIME DESTINATION bin)
+endif()
+install(TARGETS forge-decompiler fclass-decompile fclass-structurer forge-format forge-lint forge-debug RUNTIME DESTINATION bin)
