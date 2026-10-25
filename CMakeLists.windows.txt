@@ -156,3 +156,15 @@ if(FORGE_WITH_LSP)
     install(TARGETS forge-lsp RUNTIME DESTINATION bin)
 endif()
 install(TARGETS forge-decompiler fclass-decompile fclass-structurer forge-format forge-lint forge-debug RUNTIME DESTINATION bin)
+
+# c2forge - C/C++ to Forge translator
+add_executable(c2forge
+    tools/c2forge.cpp
+)
+target_include_directories(c2forge PRIVATE . src)
+
+# forge2c - Forge to C/C++ translator
+add_executable(forge2c
+    tools/forge2c.cpp
+)
+target_include_directories(forge2c PRIVATE . src)
