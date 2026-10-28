@@ -168,3 +168,8 @@ add_executable(forge2c
     tools/forge2c.cpp
 )
 target_include_directories(forge2c PRIVATE . src)
+
+add_executable(forge-rebuild
+    tools/forge_rebuild_engine.cpp
+)
+target_link_libraries(forge-rebuild PRIVATE stdc++fs)
