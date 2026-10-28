@@ -625,3 +625,6 @@ ExprPtr Parser::parseStringInterp() {
     }
     return makeExpr(StringInterpExpr{parts});
 }
+
+// CFMAKE/PARSER EXTENSION: More permissive C++/Java style parsing
+// Allow 'public:', 'private:', 'protected:' labels
