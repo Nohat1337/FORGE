@@ -138,3 +138,81 @@ cmake --build build-release --target forge_core -j4    # Embeddable runtime libr
 **[GitHub](https://github.com/Nohat1337/FORGE)** • **Built with C++17**
 
 </div>
+
+## ✦ Android Liquid Glass SDK
+
+Forge has built-in Android Liquid Glass UI support powered by Kyant0 backdrop (v1.0.6).
+
+### Setup
+```bash
+forgevm android new ./myapp --package com.example.myapp
+cd myapp
+```
+
+### Creating Glass UI Elements
+```forge
+// glass_demo.fge
+gui.create_bottombar("tabbar", 0, 500, 400, 80)
+gui.set_glass("tabbar", 0.6, 1.1, 0.85)
+gui.set_tint("tabbar", "#40FFFFFF")
+
+gui.create_button("action_btn", "Launch", 150, 200)
+gui.on_click("action_btn", fn() {
+  print("Action triggered")
+})
+
+gui.create_magnifier("lens", 100, 300, 80, 80)
+gui.set_glass("lens", 1.0, 1.3, 0.7)
+```
+
+### Available Widgets
+| Widget | Function | Notes |
+| :-- | :-- | :-- |
+| `bottombar` | `gui.create_bottombar(id, x,y,w,h)` | Liquid glass bottom navigation |
+| `segmented` | `gui.create_segmented(id, items, x,y,w,h)` | Segmented control with glass |
+| `card` | `gui.create_card(id, x,y,w,h)` | Glass card container |
+| `stepper` | `gui.create_stepper(id, x,y,w,h)` | +/- stepper |
+| `magnifier` | `gui.create_magnifier(id, x,y,w,h)` | Liquid lens effect |
+| `search` | `gui.create_search(id, x,y,w,h)` | Glass search bar |
+| `draggertabs` | `gui.create_draggertabs(id, tabs, x,y,w,h)` | Draggable tabs |
+
+### Glass Effects
+```forge
+// Apply frosted glass effect
+gui.set_glass(widget_id, blur, saturation, opacity)
+// blur: 0.0-1.5, saturation: 0.8-1.5, opacity: 0.0-1.0
+
+// Apply tint color
+gui.set_tint(widget_id, "#RRGGBB")      // solid tint
+gui.set_tint(widget_id, "#AARRGGBB")    // with alpha
+```
+
+### Button Callbacks
+```forge
+gui.create_button("btn", "Press", 50, 50)
+gui.on_click("btn", fn() {
+  // Handle click
+  gui.set_tint("btn", "#FF6B35")
+})
+```
+
+### Build & Run
+```bash
+forgevm android build ./myapp
+forgevm android install ./myapp  # requires ADB
+forgevm android run ./myapp
+```
+
+## ✦ Transpilers & Rebuild Engine
+
+```bash
+# C/C++ <-> Forge
+c2forge app.c app.fge
+forge2c app.fge app.c
+
+# Cross-platform rebuild
+forge-rebuild ios2android ./MyiOSApp.xcodeproj
+forge-rebuild bundle app.fge --os win --arch x64    # .exe
+forge-rebuild bundle app.fge --os darwin --arch arm64 # .app/.dmg
+forge-rebuild bundle app.fge --os linux --arch x64   # raw ELF
+```
