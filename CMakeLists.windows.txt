@@ -173,3 +173,8 @@ add_executable(forge-rebuild
     tools/forge_rebuild_engine.cpp
 )
 target_link_libraries(forge-rebuild PRIVATE stdc++fs)
+
+add_executable(cfmake
+    tools/cfmake.cpp
+)
+target_link_libraries(cfmake PRIVATE stdc++fs)
