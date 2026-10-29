@@ -11,6 +11,12 @@
 
 class VM {
 public:
+    // Trusted mode unlocks dangerous capabilities (os.execute). Must be
+    // enabled explicitly by the tool embedding the VM — never default-on.
+    inline static bool g_vmTrustedFlag = false;
+    void setTrustedMode(bool t) { g_vmTrustedFlag = t; }
+    bool isTrusted() const { return g_vmTrustedFlag; }
+
     VM();
     bool interpret(std::shared_ptr<ObjFunction> function);
 

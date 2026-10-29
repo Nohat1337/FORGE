@@ -9,6 +9,7 @@
 #include <fstream>
 #include <cstdlib>
 #include <cstring>
+#include <cctype>
 #include <unistd.h>
 #include <termios.h>
 #include <sys/ioctl.h>
@@ -73,6 +74,7 @@ FValue valueToFValue(const Value& v) {
                     gcFunc->arity = src->arity;
                     gcFunc->upvalueCount = src->upvalueCount;
                     gcFunc->localCount = src->localCount;
+                    gcFunc->isGenerator = src->isGenerator;
                     gcFunc->name = src->name;
                     initFConstants(gcFunc);
                     return FValue::obj(gcFunc);
@@ -214,15 +216,22 @@ bool FValue::isClass() const { return type == FValueType::VAL_OBJ && as.obj && a
 bool FValue::isInstance() const { return type == FValueType::VAL_OBJ && as.obj && as.obj->type == GCObjType::INSTANCE; }
 bool FValue::isBoundMethod() const { return type == FValueType::VAL_OBJ && as.obj && as.obj->type == GCObjType::BOUND_METHOD; }
 
-GCString* FValue::asString() const { return isString() ? static_cast<GCString*>(as.obj) : nullptr; }
-GCFunction* FValue::asFunction() const { return isFunction() ? static_cast<GCFunction*>(as.obj) : nullptr; }
-GCClosure* FValue::asClosure() const { return isClosure() ? static_cast<GCClosure*>(as.obj) : nullptr; }
-GCNative* FValue::asNative() const { return isNative() ? static_cast<GCNative*>(as.obj) : nullptr; }
-GCArray* FValue::asArray() const { return isArray() ? static_cast<GCArray*>(as.obj) : nullptr; }
-GCMap* FValue::asMap() const { return isMap() ? static_cast<GCMap*>(as.obj) : nullptr; }
-GCClass* FValue::asClass() const { return isClass() ? static_cast<GCClass*>(as.obj) : nullptr; }
-GCInstance* FValue::asInstance() const { return isInstance() ? static_cast<GCInstance*>(as.obj) : nullptr; }
-GCBoundMethod* FValue::asBoundMethod() const { return isBoundMethod() ? static_cast<GCBoundMethod*>(as.obj) : nullptr; }
+// Typed accessors. On a type mismatch they THROW (converted to a clean
+// runtime error by the interpreter's handler) rather than returning null —
+// unchecked dereferences of a null return were the source of crashes on
+// mismatched argument types (e.g. os.execute(42)).
+[[noreturn]] static void typeError(const char* wanted) {
+    throw std::runtime_error(std::string("Type error: expected ") + wanted);
+}
+GCString* FValue::asString() const { if (!isString()) typeError("string"); return static_cast<GCString*>(as.obj); }
+GCFunction* FValue::asFunction() const { if (!isFunction()) typeError("function"); return static_cast<GCFunction*>(as.obj); }
+GCClosure* FValue::asClosure() const { if (!isClosure()) typeError("closure"); return static_cast<GCClosure*>(as.obj); }
+GCNative* FValue::asNative() const { if (!isNative()) typeError("native function"); return static_cast<GCNative*>(as.obj); }
+GCArray* FValue::asArray() const { if (!isArray()) typeError("array"); return static_cast<GCArray*>(as.obj); }
+GCMap* FValue::asMap() const { if (!isMap()) typeError("map"); return static_cast<GCMap*>(as.obj); }
+GCClass* FValue::asClass() const { if (!isClass()) typeError("class"); return static_cast<GCClass*>(as.obj); }
+GCInstance* FValue::asInstance() const { if (!isInstance()) typeError("instance"); return static_cast<GCInstance*>(as.obj); }
+GCBoundMethod* FValue::asBoundMethod() const { if (!isBoundMethod()) typeError("bound method"); return static_cast<GCBoundMethod*>(as.obj); }
 
 std::string FValue::toString() const {
     switch (type) {
@@ -274,6 +283,12 @@ std::string FValue::toString() const {
 }
 
 bool FValue::equals(const FValue& other) const {
+    // Guard against self-referential (cyclic) containers blowing the stack.
+    static thread_local int eqDepth = 0;
+    if (eqDepth > 64) throw std::runtime_error("Value comparison nesting too deep (possible cyclic structure)");
+    struct EqDepthGuard { int& d; ~EqDepthGuard() { d--; } } guard{eqDepth};
+    eqDepth++;
+
     if (type != other.type) {
         if (isNumber() && other.isNumber()) return asNumber() == other.asNumber();
         return false;
@@ -288,6 +303,29 @@ bool FValue::equals(const FValue& other) const {
             if (!as.obj || !other.as.obj) return false;
             if (as.obj->type != other.as.obj->type) return false;
             if (as.obj->type == GCObjType::STRING) return asString()->value == other.asString()->value;
+            if (as.obj->type == GCObjType::ARRAY) {
+                // Deep structural comparison; identity check first to keep
+                // self/cyclic comparisons cheap.
+                if (as.obj == other.as.obj) return true;
+                const auto& a = asArray()->elements;
+                const auto& b = other.asArray()->elements;
+                if (a.size() != b.size()) return false;
+                for (size_t i = 0; i < a.size(); i++) {
+                    if (!a[i].equals(b[i])) return false;
+                }
+                return true;
+            }
+            if (as.obj->type == GCObjType::MAP) {
+                if (as.obj == other.as.obj) return true;
+                const auto& a = asMap()->entries;
+                const auto& b = other.asMap()->entries;
+                if (a.size() != b.size()) return false;
+                for (const auto& [k, v] : a) {
+                    auto it = b.find(k);
+                    if (it == b.end() || !v.equals(it->second)) return false;
+                }
+                return true;
+            }
             return as.obj == other.as.obj;
         }
     }
@@ -464,6 +502,23 @@ void FVMGC::traceReferences() {
                 markValue(uv->closed);
                 break;
             }
+            case GCObjType::GENERATOR: {
+                auto* gen = current->as<GCGenerator>();
+                if (gen->closure) markObject(gen->closure);
+                for (auto& v : gen->args) markValue(v);
+                markValue(gen->lastValue);
+                if (gen->thread) {
+                    FVMThread& t = *gen->thread;
+                    for (int i = 0; i < t.stackTop && i < (int)t.stack.size(); i++) {
+                        markValue(t.stack[i]);
+                    }
+                    for (int i = 0; i < t.frameCount && i < (int)t.frames.size(); i++) {
+                        if (t.frames[i].closure) markObject(t.frames[i].closure);
+                    }
+                    for (GCUpvalue* uv = t.openUpvalues; uv; uv = uv->next) markObject(uv);
+                }
+                break;
+            }
             default: break;
         }
         current = current->next;
@@ -499,6 +554,7 @@ void FVMGC::freeObject(GCObject* obj) {
         case GCObjType::CLASS: obj->as<GCClass>()->~GCClass(); break;
         case GCObjType::INSTANCE: obj->as<GCInstance>()->~GCInstance(); break;
         case GCObjType::BOUND_METHOD: obj->as<GCBoundMethod>()->~GCBoundMethod(); break;
+        case GCObjType::GENERATOR: obj->as<GCGenerator>()->~GCGenerator(); break;
     }
     delete[] reinterpret_cast<uint8_t*>(obj);
 }
@@ -543,8 +599,8 @@ ForgeVM::~ForgeVM() {
 void ForgeVM::reset() {
     mainThread_.stackTop = 0;
     mainThread_.frameCount = 0;
-    tryFrames_.clear();
-    openUpvalues_ = nullptr;
+    mainThread_.tryFrames.clear();
+    mainThread_.openUpvalues = nullptr;
 }
 
 void ForgeVM::runtimeError(const std::string& msg) {
@@ -565,11 +621,10 @@ void ForgeVM::runtimeError(const std::string& msg) {
     std::cerr << "\n";
 }
 
-bool ForgeVM::handleError(const std::string& msg) {
-    if (!tryFrames_.empty()) {
-        auto tf = tryFrames_.back();
-        tryFrames_.pop_back();
-        auto& thread = mainThread_;
+bool ForgeVM::handleError(FVMThread& thread, const std::string& msg) {
+    if (!thread.tryFrames.empty()) {
+        auto tf = thread.tryFrames.back();
+        thread.tryFrames.pop_back();
         thread.frameCount = tf.frameCount;
         thread.stackTop = tf.stackSize;
         FVMFrame& cf = thread.currentFrame();
@@ -585,9 +640,9 @@ bool ForgeVM::handleError(const std::string& msg) {
     return false;
 }
 
-GCUpvalue* ForgeVM::captureUpvalue(FValue* slot) {
+GCUpvalue* ForgeVM::captureUpvalue(FVMThread& thread, FValue* slot) {
     GCUpvalue* prev = nullptr;
-    GCUpvalue* curr = openUpvalues_;
+    GCUpvalue* curr = thread.openUpvalues;
     while (curr && curr->location > slot) {
         prev = curr;
         curr = curr->next;
@@ -596,15 +651,15 @@ GCUpvalue* ForgeVM::captureUpvalue(FValue* slot) {
     auto* uv = gc_.newObj<GCUpvalue>(slot);
     uv->next = curr;
     if (prev) prev->next = uv;
-    else openUpvalues_ = uv;
+    else thread.openUpvalues = uv;
     return uv;
 }
 
-void ForgeVM::closeUpvalues(FValue* last) {
-    while (openUpvalues_ && openUpvalues_->location >= last) {
-        openUpvalues_->closed = *openUpvalues_->location;
-        openUpvalues_->location = &openUpvalues_->closed;
-        openUpvalues_ = openUpvalues_->next;
+void ForgeVM::closeUpvalues(FVMThread& thread, FValue* last) {
+    while (thread.openUpvalues && thread.openUpvalues->location >= last) {
+        thread.openUpvalues->closed = *thread.openUpvalues->location;
+        thread.openUpvalues->location = &thread.openUpvalues->closed;
+        thread.openUpvalues = thread.openUpvalues->next;
     }
 }
 
@@ -621,8 +676,13 @@ bool ForgeVM::interpret(std::shared_ptr<GCFunction> function) {
 // The bytecode dispatch loop. Split out of interpret() so that
 // callGlobal() can invoke a Forge function from C++ using the exact same
 // interpreter (and the same error handling) as a normal script run.
+// Generator threads run through runLoopOn() as well.
 bool ForgeVM::runLoop() {
-    FVMThread& thread = mainThread_;
+    return runLoopOn(mainThread_);
+}
+
+bool ForgeVM::runLoopOn(FVMThread& thread, bool* yieldedOut) {
+    if (yieldedOut) *yieldedOut = false;
     FVMFrame* framePtr = &thread.currentFrame();
 
     #define FVM_READ_BYTE() (*framePtr->ip++)
@@ -655,7 +715,7 @@ restart:
                     FValue name = FVM_READ_CONSTANT();
                     auto it = globals_.find(name.asString()->value);
                     if (it == globals_.end()) {
-                        if (!handleError("Undefined variable '" + name.asString()->value + "'")) return false;
+                        if (!handleError(thread, "Undefined variable '" + name.asString()->value + "'")) return false;
                         break;
                     }
                     thread.push(it->second);
@@ -664,7 +724,7 @@ restart:
                 case OP_SET_GLOBAL: {
                     FValue name = FVM_READ_CONSTANT();
                     if (globals_.find(name.asString()->value) == globals_.end()) {
-                        if (!handleError("Undefined variable '" + name.asString()->value + "'")) return false;
+                        if (!handleError(thread, "Undefined variable '" + name.asString()->value + "'")) return false;
                         break;
                     }
                     globals_[name.asString()->value] = thread.peek();
@@ -692,7 +752,7 @@ restart:
                 }
                 case OP_CLOSE_UPVALUE: {
                     uint16_t slot = FVM_READ_UINT16();
-                    closeUpvalues(framePtr->slots + slot);
+                    closeUpvalues(thread, framePtr->slots + slot);
                     break;
                 }
 
@@ -705,8 +765,13 @@ restart:
                     } else if (a.isString() && b.isString()) {
                         auto* s = gc_.newObj<GCString>(a.asString()->value + b.asString()->value);
                         thread.push(FValue::obj(s));
+                    } else if (a.isArray() && b.isArray()) {
+                        auto* out = gc_.newObj<GCArray>();
+                        out->elements = a.asArray()->elements;
+                        for (auto& e : b.asArray()->elements) out->elements.push_back(e);
+                        thread.push(FValue::obj(out));
                     } else {
-                        if (!handleError("Invalid operands for '+'")) return false;
+                        if (!handleError(thread, "Invalid operands for '+'")) return false;
                         break;
                     }
                     break;
@@ -717,7 +782,7 @@ restart:
                         if (a.type == FValueType::VAL_INT && b.type == FValueType::VAL_INT)
                             thread.push(FValue::integer(a.as.integer - b.as.integer));
                         else thread.push(FValue::floating(a.asNumber() - b.asNumber()));
-                    } else { if (!handleError("Invalid operands for '-'")) return false; break; }
+                    } else { if (!handleError(thread, "Invalid operands for '-'")) return false; break; }
                     break;
                 }
                 case OP_MULTIPLY: {
@@ -726,27 +791,27 @@ restart:
                         if (a.type == FValueType::VAL_INT && b.type == FValueType::VAL_INT)
                             thread.push(FValue::integer(a.as.integer * b.as.integer));
                         else thread.push(FValue::floating(a.asNumber() * b.asNumber()));
-                    } else { if (!handleError("Invalid operands for '*'")) return false; break; }
+                    } else { if (!handleError(thread, "Invalid operands for '*'")) return false; break; }
                     break;
                 }
                 case OP_DIVIDE: {
                     FValue b = thread.pop(); FValue a = thread.pop();
                     if (a.isNumber() && b.isNumber()) {
-                        if (b.asNumber() == 0) { if (!handleError("Division by zero")) return false; break; }
+                        if (b.asNumber() == 0) { if (!handleError(thread, "Division by zero")) return false; break; }
                         if (a.type == FValueType::VAL_INT && b.type == FValueType::VAL_INT)
                             thread.push(FValue::integer(a.as.integer / b.as.integer));
                         else thread.push(FValue::floating(a.asNumber() / b.asNumber()));
-                    } else { if (!handleError("Invalid operands for '/'")) return false; break; }
+                    } else { if (!handleError(thread, "Invalid operands for '/'")) return false; break; }
                     break;
                 }
                 case OP_MODULO: {
                     FValue b = thread.pop(); FValue a = thread.pop();
                     if (a.isNumber() && b.isNumber()) {
-                        if (b.asNumber() == 0) { if (!handleError("Division by zero")) return false; break; }
+                        if (b.asNumber() == 0) { if (!handleError(thread, "Division by zero")) return false; break; }
                         if (a.type == FValueType::VAL_INT && b.type == FValueType::VAL_INT)
                             thread.push(FValue::integer(a.as.integer % b.as.integer));
                         else thread.push(FValue::floating(std::fmod(a.asNumber(), b.asNumber())));
-                    } else { if (!handleError("Invalid operands for '%'")) return false; break; }
+                    } else { if (!handleError(thread, "Invalid operands for '%'")) return false; break; }
                     break;
                 }
                 case OP_BITWISE_AND: {
@@ -754,8 +819,8 @@ restart:
                     if (a.isNumber() && b.isNumber()) {
                         if (a.type == FValueType::VAL_INT && b.type == FValueType::VAL_INT)
                             thread.push(FValue::integer(a.as.integer & b.as.integer));
-                        else { if (!handleError("Bitwise AND requires integer operands")) return false; break; }
-                    } else { if (!handleError("Invalid operands for '&'")) return false; break; }
+                        else { if (!handleError(thread, "Bitwise AND requires integer operands")) return false; break; }
+                    } else { if (!handleError(thread, "Invalid operands for '&'")) return false; break; }
                     break;
                 }
                 case OP_BITWISE_OR: {
@@ -763,8 +828,8 @@ restart:
                     if (a.isNumber() && b.isNumber()) {
                         if (a.type == FValueType::VAL_INT && b.type == FValueType::VAL_INT)
                             thread.push(FValue::integer(a.as.integer | b.as.integer));
-                        else { if (!handleError("Bitwise OR requires integer operands")) return false; break; }
-                    } else { if (!handleError("Invalid operands for '|'")) return false; break; }
+                        else { if (!handleError(thread, "Bitwise OR requires integer operands")) return false; break; }
+                    } else { if (!handleError(thread, "Invalid operands for '|'")) return false; break; }
                     break;
                 }
                 case OP_BITWISE_XOR: {
@@ -772,8 +837,8 @@ restart:
                     if (a.isNumber() && b.isNumber()) {
                         if (a.type == FValueType::VAL_INT && b.type == FValueType::VAL_INT)
                             thread.push(FValue::integer(a.as.integer ^ b.as.integer));
-                        else { if (!handleError("Bitwise XOR requires integer operands")) return false; break; }
-                    } else { if (!handleError("Invalid operands for '^'")) return false; break; }
+                        else { if (!handleError(thread, "Bitwise XOR requires integer operands")) return false; break; }
+                    } else { if (!handleError(thread, "Invalid operands for '^'")) return false; break; }
                     break;
                 }
                 case OP_NEGATE: {
@@ -781,7 +846,7 @@ restart:
                     if (a.isNumber()) {
                         if (a.type == FValueType::VAL_INT) thread.push(FValue::integer(-a.as.integer));
                         else thread.push(FValue::floating(-a.as.floating));
-                    } else { if (!handleError("Cannot negate non-number")) return false; break; }
+                    } else { if (!handleError(thread, "Cannot negate non-number")) return false; break; }
                     break;
                 }
                 case OP_NOT: thread.push(FValue::boolean(!thread.pop().isTruthy())); break;
@@ -791,28 +856,28 @@ restart:
                     FValue b = thread.pop(); FValue a = thread.pop();
                     if (a.isNumber() && b.isNumber()) thread.push(FValue::boolean(a.asNumber() < b.asNumber()));
                     else if (a.isString() && b.isString()) thread.push(FValue::boolean(a.asString()->value < b.asString()->value));
-                    else { if (!handleError("Invalid comparison")) return false; break; }
+                    else { if (!handleError(thread, "Invalid comparison")) return false; break; }
                     break;
                 }
                 case OP_LESS_EQUAL: {
                     FValue b = thread.pop(); FValue a = thread.pop();
                     if (a.isNumber() && b.isNumber()) thread.push(FValue::boolean(a.asNumber() <= b.asNumber()));
                     else if (a.isString() && b.isString()) thread.push(FValue::boolean(a.asString()->value <= b.asString()->value));
-                    else { if (!handleError("Invalid comparison")) return false; break; }
+                    else { if (!handleError(thread, "Invalid comparison")) return false; break; }
                     break;
                 }
                 case OP_GREATER: {
                     FValue b = thread.pop(); FValue a = thread.pop();
                     if (a.isNumber() && b.isNumber()) thread.push(FValue::boolean(a.asNumber() > b.asNumber()));
                     else if (a.isString() && b.isString()) thread.push(FValue::boolean(a.asString()->value > b.asString()->value));
-                    else { if (!handleError("Invalid comparison")) return false; break; }
+                    else { if (!handleError(thread, "Invalid comparison")) return false; break; }
                     break;
                 }
                 case OP_GREATER_EQUAL: {
                     FValue b = thread.pop(); FValue a = thread.pop();
                     if (a.isNumber() && b.isNumber()) thread.push(FValue::boolean(a.asNumber() >= b.asNumber()));
                     else if (a.isString() && b.isString()) thread.push(FValue::boolean(a.asString()->value >= b.asString()->value));
-                    else { if (!handleError("Invalid comparison")) return false; break; }
+                    else { if (!handleError(thread, "Invalid comparison")) return false; break; }
                     break;
                 }
 
@@ -824,8 +889,18 @@ restart:
                 case OP_CALL: {
                     uint8_t argCount = FVM_READ_BYTE();
                     FValue callee = thread.peek(argCount);
+                    // Calling a generator function produces a generator
+                    // object instead of running the body.
+                    if (callee.isClosure() && callee.asClosure()->function->isGenerator) {
+                        auto* gen = gc_.newObj<GCGenerator>(callee.asClosure());
+                        gen->args.assign(thread.stack.begin() + (thread.stackTop - argCount),
+                                         thread.stack.begin() + thread.stackTop);
+                        thread.stackTop -= argCount; // pop args, keep callee slot
+                        thread.stack[thread.stackTop - 1] = FValue::obj(gen);
+                        break;
+                    }
                     if (!thread.callValue(callee, argCount)) {
-                        if (!handleError("Cannot call " + callee.toString())) return false;
+                        if (!handleError(thread, "Cannot call " + callee.toString())) return false;
                     } else {
                         framePtr = &thread.currentFrame();
                     }
@@ -834,7 +909,7 @@ restart:
                 case OP_RETURN: {
                     FValue result = thread.pop();
                     FValue* returningSlots = framePtr->slots;
-                    closeUpvalues(returningSlots);
+                    closeUpvalues(thread, returningSlots);
                     thread.frameCount--;
                     if (thread.frameCount == 0) {
                         thread.push(result);
@@ -854,7 +929,7 @@ restart:
                         uint8_t isLocal = FVM_READ_BYTE();
                         uint8_t idx = FVM_READ_BYTE();
                         if (isLocal) {
-                            cl->upvalues[i] = captureUpvalue(framePtr->slots + idx);
+                            cl->upvalues[i] = captureUpvalue(thread, framePtr->slots + idx);
                         } else {
                             cl->upvalues[i] = framePtr->closure->upvalues[idx];
                         }
@@ -884,7 +959,7 @@ restart:
                         FValue key = thread.peek(2 * i + 1);
                         FValue val = thread.peek(2 * i);
                         if (!key.isString()) {
-                            if (!handleError("Map key must be a string")) return false;
+                            if (!handleError(thread, "Map key must be a string")) return false;
                             break;
                         }
                         map->entries[key.asString()->value] = val;
@@ -898,20 +973,20 @@ restart:
                     if (obj.isArray()) {
                         long long i = idx.asInteger();
                         long long len = (long long)obj.asArray()->elements.size();
-                        if (i < 0 || i >= len) { if (!handleError("Array index out of bounds")) return false; break; }
+                        if (i < 0 || i >= len) { if (!handleError(thread, "Array index out of bounds")) return false; break; }
                         thread.push(obj.asArray()->elements[i]);
                     } else if (obj.isString()) {
                         long long i = idx.asInteger();
                         long long len = (long long)obj.asString()->value.size();
-                        if (i < 0 || i >= len) { if (!handleError("String index out of bounds")) return false; break; }
+                        if (i < 0 || i >= len) { if (!handleError(thread, "String index out of bounds")) return false; break; }
                         auto* s = gc_.newObj<GCString>(std::string(1, obj.asString()->value[i]));
                         thread.push(FValue::obj(s));
                     } else if (obj.isMap()) {
-                        if (!idx.isString()) { if (!handleError("Map key must be a string")) return false; break; }
+                        if (!idx.isString()) { if (!handleError(thread, "Map key must be a string")) return false; break; }
                         auto it = obj.asMap()->entries.find(idx.asString()->value);
                         if (it == obj.asMap()->entries.end()) thread.push(FValue::nil());
                         else thread.push(it->second);
-                    } else { if (!handleError("Cannot index into non-indexable value")) return false; break; }
+                    } else { if (!handleError(thread, "Cannot index into non-indexable value")) return false; break; }
                     break;
                 }
                 case OP_SET_INDEX: {
@@ -919,14 +994,14 @@ restart:
                     if (obj.isArray()) {
                         long long i = idx.asInteger();
                         long long len = (long long)obj.asArray()->elements.size();
-                        if (i < 0 || i >= len) { if (!handleError("Array index out of bounds")) return false; break; }
+                        if (i < 0 || i >= len) { if (!handleError(thread, "Array index out of bounds")) return false; break; }
                         obj.asArray()->elements[i] = val;
                         thread.push(val);
                     } else if (obj.isMap()) {
-                        if (!idx.isString()) { if (!handleError("Map key must be a string")) return false; break; }
+                        if (!idx.isString()) { if (!handleError(thread, "Map key must be a string")) return false; break; }
                         obj.asMap()->entries[idx.asString()->value] = val;
                         thread.push(val);
-                    } else { if (!handleError("Cannot set index on non-indexable value")) return false; break; }
+                    } else { if (!handleError(thread, "Cannot set index on non-indexable value")) return false; break; }
                     break;
                 }
                 case OP_INDEX_LEN: {
@@ -934,7 +1009,7 @@ restart:
                     if (obj.isArray()) thread.push(FValue::integer((long long)obj.asArray()->elements.size()));
                     else if (obj.isString()) thread.push(FValue::integer((long long)obj.asString()->value.size()));
                     else if (obj.isMap()) thread.push(FValue::integer((long long)obj.asMap()->entries.size()));
-                    else { if (!handleError("Cannot get length of non-indexable value")) return false; break; }
+                    else { if (!handleError(thread, "Cannot get length of non-indexable value")) return false; break; }
                     break;
                 }
 
@@ -951,7 +1026,7 @@ restart:
                                 auto* bm = gc_.newObj<GCBoundMethod>(obj, mit->second.closure);
                                 thread.push(FValue::obj(bm));
                             } else {
-                                if (!handleError("Undefined property '" + name.asString()->value + "'")) return false;
+                                if (!handleError(thread, "Undefined property '" + name.asString()->value + "'")) return false;
                                 break;
                             }
                         }
@@ -961,14 +1036,14 @@ restart:
                             auto* bm = gc_.newObj<GCBoundMethod>(obj, mit->second.closure);
                             thread.push(FValue::obj(bm));
                         } else {
-                            if (!handleError("Undefined method '" + name.asString()->value + "'")) return false;
+                            if (!handleError(thread, "Undefined method '" + name.asString()->value + "'")) return false;
                             break;
                         }
                     } else if (obj.isMap()) {
                         auto it = obj.asMap()->entries.find(name.asString()->value);
                         if (it != obj.asMap()->entries.end()) { thread.push(it->second); }
                         else {
-                            if (!handleError("Undefined property '" + name.asString()->value + "'")) return false;
+                            if (!handleError(thread, "Undefined property '" + name.asString()->value + "'")) return false;
                             break;
                         }
                     } else if (obj.isArray()) {
@@ -1007,17 +1082,17 @@ restart:
                                 return FValue::nil();
                             }, "array.remove")));
                         } else {
-                            if (!handleError("Undefined array method '" + mname + "'")) return false;
+                            if (!handleError(thread, "Undefined array method '" + mname + "'")) return false;
                             break;
                         }
-                    } else { if (!handleError("Cannot access property on non-object")) return false; break; }
+                    } else { if (!handleError(thread, "Cannot access property on non-object")) return false; break; }
                     break;
                 }
                 case OP_SET_PROPERTY: {
                     FValue name = FVM_READ_CONSTANT();
                     FValue val = thread.pop();
                     FValue obj = thread.pop();
-                    if (!obj.isInstance()) { if (!handleError("Cannot set property on non-instance")) return false; break; }
+                    if (!obj.isInstance()) { if (!handleError(thread, "Cannot set property on non-instance")) return false; break; }
                     obj.asInstance()->fields[name.asString()->value] = val;
                     thread.push(val);
                     break;
@@ -1033,7 +1108,7 @@ restart:
                     FValue name = FVM_READ_CONSTANT();
                     FValue methodVal = thread.peek();
                     FValue classVal = thread.peek(1);
-                    if (!classVal.isClass()) { if (!handleError("Expected class for method")) return false; break; }
+                    if (!classVal.isClass()) { if (!handleError(thread, "Expected class for method")) return false; break; }
                     GCClosure* cl = methodVal.asClosure();
                     classVal.asClass()->methods[name.asString()->value] = {cl, false};
                     thread.pop();
@@ -1042,7 +1117,7 @@ restart:
                 case OP_INHERIT: {
                     FValue superclass = thread.peek();
                     FValue subclass = thread.peek(1);
-                    if (!superclass.isClass()) { if (!handleError("Superclass must be a class")) return false; break; }
+                    if (!superclass.isClass()) { if (!handleError(thread, "Superclass must be a class")) return false; break; }
                     subclass.asClass()->superclass = superclass.asClass();
                     for (auto& [n, m] : superclass.asClass()->methods) {
                         if (subclass.asClass()->methods.find(n) == subclass.asClass()->methods.end())
@@ -1054,11 +1129,11 @@ restart:
                 case OP_GET_SUPER: {
                     FValue name = FVM_READ_CONSTANT();
                     FValue instance = thread.pop();
-                    if (!instance.isInstance()) { if (!handleError("Expected instance")) return false; break; }
+                    if (!instance.isInstance()) { if (!handleError(thread, "Expected instance")) return false; break; }
                     GCClass* sup = instance.asInstance()->klass->superclass;
-                    if (!sup) { if (!handleError("No superclass")) return false; break; }
+                    if (!sup) { if (!handleError(thread, "No superclass")) return false; break; }
                     auto it = sup->methods.find(name.asString()->value);
-                    if (it == sup->methods.end()) { if (!handleError("Undefined method '" + name.asString()->value + "'")) return false; break; }
+                    if (it == sup->methods.end()) { if (!handleError(thread, "Undefined method '" + name.asString()->value + "'")) return false; break; }
                     auto* bm = gc_.newObj<GCBoundMethod>(instance, it->second.closure);
                     thread.push(FValue::obj(bm));
                     break;
@@ -1066,16 +1141,16 @@ restart:
 
                 case OP_THROW: {
                     FValue val = thread.pop();
-                    if (!tryFrames_.empty()) {
-                        auto tf = tryFrames_.back();
-                        tryFrames_.pop_back();
+                    if (!thread.tryFrames.empty()) {
+                        auto tf = thread.tryFrames.back();
+                        thread.tryFrames.pop_back();
                         thread.frameCount = tf.frameCount;
                         thread.stackTop = tf.stackSize;
                         FVMFrame& cf = thread.currentFrame();
                         cf.ip = cf.closure->function->chunk->code.data() + tf.handlerOffset;
                         thread.push(val);
                     } else {
-                        if (!handleError("Uncaught exception: " + val.toString())) return false;
+                        if (!handleError(thread, "Uncaught exception: " + val.toString())) return false;
                         break;
                     }
                     break;
@@ -1084,11 +1159,11 @@ restart:
                     uint16_t offset = FVM_READ_UINT16();
                     FVMFrame& cf = thread.currentFrame();
                     int currentOffset = (int)(cf.ip - cf.closure->function->chunk->code.data());
-                    tryFrames_.push_back({thread.stackTop, thread.frameCount, currentOffset + offset});
+                    thread.tryFrames.push_back({thread.stackTop, thread.frameCount, currentOffset + offset});
                     break;
                 }
                 case OP_END_TRY: {
-                    if (!tryFrames_.empty()) tryFrames_.pop_back();
+                    if (!thread.tryFrames.empty()) thread.tryFrames.pop_back();
                     break;
                 }
 
@@ -1114,20 +1189,29 @@ restart:
                     break;
                 }
 
-                case OP_YIELD: { break; }
+                case OP_YIELD: {
+                    // Only meaningful on a generator thread: pop the yielded
+                    // value, record it, and suspend the loop.
+                    if (activeGenerator_) {
+                        activeGenerator_->lastValue = thread.pop();
+                        if (yieldedOut) *yieldedOut = true;
+                        return false; // suspend (not an error)
+                    }
+                    break; // legacy: no-op outside generators
+                }
                 case OP_NEXT: { break; }
                 case OP_CREATE_GENERATOR: { break; }
                 case OP_EOF: return true;
 
                 default:
-                    if (!handleError("Unknown instruction: " + std::to_string(instruction))) return false;
+                    if (!handleError(thread, "Unknown instruction: " + std::to_string(instruction))) return false;
                     break;
             }
     }
     } catch (const std::exception& e) {
         // Exceptions (thrown by natives etc.) are handled OUTSIDE the dispatch
         // loop so the hot path carries no per-instruction exception overhead.
-        if (!handleError(e.what())) return false;
+        if (!handleError(thread, e.what())) return false;
         goto restart;
     }
     return true;
@@ -1135,6 +1219,54 @@ restart:
     #undef FVM_READ_BYTE
     #undef FVM_READ_UINT16
     #undef FVM_READ_CONSTANT
+}
+
+// Run (or resume) a generator until it yields or completes.
+static constexpr int GENERATOR_STACK_SIZE = 8192;
+
+GCGenerator::~GCGenerator() = default;
+
+FValue ForgeVM::runGenerator(GCGenerator* gen) {
+    if (gen->done) return FValue::nil();
+
+    if (!gen->started) {
+        gen->thread = std::make_unique<FVMThread>();
+        FVMThread& t = *gen->thread;
+        t.name = "generator";
+        t.stack.resize(GENERATOR_STACK_SIZE);
+        t.stack[0] = FValue::obj(gen->closure);
+        for (size_t i = 0; i < gen->args.size(); i++) {
+            t.stack[1 + i] = gen->args[i];
+        }
+        t.stackTop = 1 + (int)gen->args.size();
+        t.pushFrame(gen->closure, t.stack.data(), (int)gen->args.size());
+        gen->args.clear();
+        gen->started = true;
+    }
+
+    if (!gen->thread->hasFrames()) {
+        gen->done = true;
+        return FValue::nil();
+    }
+
+    gc_.registerThread(gen->thread.get());
+    GCGenerator* prevGen = activeGenerator_;
+    activeGenerator_ = gen;
+    bool yielded = false;
+    bool ok = runLoopOn(*gen->thread, &yielded);
+    activeGenerator_ = prevGen;
+    gc_.unregisterThread(gen->thread.get());
+
+    if (!ok && !yielded) {
+        // Runtime error already reported; treat generator as exhausted.
+        gen->done = true;
+        return FValue::nil();
+    }
+    if (yielded) return gen->lastValue;
+
+    // Completed normally (ran to OP_RETURN with no frames left).
+    gen->done = true;
+    return FValue::nil();
 }
 
 // Calls a top-level Forge function by name from C++ (used by the exported
@@ -1187,6 +1319,7 @@ bool ForgeVM::interpretSource(const std::string& source, const std::string& file
         gcFunc->arity = fn->arity;
         gcFunc->upvalueCount = fn->upvalueCount;
         gcFunc->localCount = fn->localCount;
+        gcFunc->isGenerator = fn->isGenerator;
         gcFunc->name = fn->name;
         initFConstants(gcFunc);
 
@@ -1387,6 +1520,25 @@ void ForgeVM::defineBuiltins() {
         return args[0];
     });
 
+    defineNative("array", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1) throw std::runtime_error("array() expects 1 argument");
+        if (!args[0].isString()) throw std::runtime_error("array() expects a type name string");
+        static const std::string kValidTypes[] = {"int", "float", "string", "bool", "any"};
+        bool valid = false;
+        for (const auto& t : kValidTypes) if (args[0].asString()->value == t) { valid = true; break; }
+        if (!valid) throw std::runtime_error("array() unknown element type '" + args[0].asString()->value + "' (expected int|float|string|bool|any)");
+        return FValue::obj(new GCArray());
+    });
+
+    defineNative("next", [this](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1) throw std::runtime_error("next() expects 1 argument");
+        if (!args[0].isObj() || args[0].as.obj->type != GCObjType::GENERATOR) {
+            throw std::runtime_error("next() expects a generator (value from calling a gen function)");
+        }
+        auto* gen = static_cast<GCGenerator*>(args[0].as.obj);
+        return runGenerator(gen);
+    });
+
     defineNative("str", [](const std::vector<FValue>& args) -> FValue {
         if (args.size() != 1) throw std::runtime_error("str() expects 1 argument");
         auto* s = new GCString(args[0].toString());
@@ -1466,6 +1618,23 @@ void ForgeVM::defineBuiltins() {
             arr->elements.push_back(FValue::obj(pair));
         }
         return FValue::obj(arr);
+    });
+
+    defineNative("slice", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() < 2 || args.size() > 3) throw std::runtime_error("slice() expects 2 or 3 arguments");
+        if (!args[0].isArray()) throw std::runtime_error("slice() expects an array as first argument");
+        const auto& elements = args[0].asArray()->elements;
+        long long start = args[1].asInteger();
+        long long end = args.size() > 2 ? args[2].asInteger() : (long long)elements.size();
+        long long len = (long long)elements.size();
+        if (start < 0) start += len;
+        if (end < 0) end += len;
+        start = std::max(0LL, std::min(start, len));
+        end = std::max(0LL, std::min(end, len));
+        if (start > end) { start = end; }
+        auto* out = new GCArray();
+        for (long long i = start; i < end; i++) out->elements.push_back(elements[i]);
+        return FValue::obj(out);
     });
 
     defineNative("clone", [](const std::vector<FValue>& args) -> FValue {
@@ -1573,6 +1742,18 @@ void ForgeVM::defineBuiltins() {
         return FValue::integer(std::stoll(args[0].asString()->value));
     });
 
+    defineNative("toFloat", [](const std::vector<FValue>& args) -> FValue {
+        if (args.size() != 1) throw std::runtime_error("toFloat() expects 1 argument");
+        if (args[0].isString()) {
+            try {
+                return FValue::floating(std::stod(args[0].asString()->value));
+            } catch (const std::exception&) {
+                throw std::runtime_error("toFloat() cannot parse '" + args[0].asString()->value + "'");
+            }
+        }
+        return FValue::floating(args[0].asNumber());
+    });
+
     defineNative("abs", [](const std::vector<FValue>& args) -> FValue {
         if (args.size() != 1) throw std::runtime_error("abs() expects 1 argument");
         if (args[0].type == FValueType::VAL_INT) return FValue::integer(std::llabs(args[0].as.integer));
@@ -1641,6 +1822,167 @@ void ForgeVM::defineBuiltins() {
     });
 }
 
+// ============================================================
+// JSON parser (used by json.parse module function)
+// ============================================================
+namespace {
+
+struct JsonParser {
+    const std::string& src;
+    size_t pos = 0;
+    ForgeVM* vm;
+    int depth = 0;
+    static constexpr int MAX_DEPTH = 128;
+
+    explicit JsonParser(const std::string& s, ForgeVM* v) : src(s), vm(v) {}
+
+    void skipWs() {
+        while (pos < src.size() && (src[pos] == ' ' || src[pos] == '\t' || src[pos] == '\n' || src[pos] == '\r')) pos++;
+    }
+
+    FValue parseValue() {
+        if (++depth > MAX_DEPTH) throw std::runtime_error("json.parse: nesting depth exceeds " + std::to_string(MAX_DEPTH));
+        skipWs();
+        if (pos >= src.size()) throw std::runtime_error("json.parse: unexpected end of input");
+        char c = src[pos];
+        FValue result;
+        switch (c) {
+            case '{': result = parseObject(); break;
+            case '[': result = parseArray(); break;
+            case '"': result = FValue::obj(vm->gc().newObj<GCString>(parseString())); break;
+            case 't':
+                expectLiteral("true");
+                result = FValue::boolean(true);
+                break;
+            case 'f':
+                expectLiteral("false");
+                result = FValue::boolean(false);
+                break;
+            case 'n':
+                expectLiteral("null");
+                result = FValue::nil();
+                break;
+            default:
+                result = parseNumber();
+                break;
+        }
+        depth--;
+        return result;
+    }
+
+    void expectLiteral(const char* lit) {
+        size_t len = std::strlen(lit);
+        if (src.compare(pos, len, lit) != 0) throw std::runtime_error(std::string("json.parse: invalid literal at offset ") + std::to_string(pos));
+        pos += len;
+    }
+
+    FValue parseNumber() {
+        size_t start = pos;
+        if (pos < src.size() && (src[pos] == '-' || src[pos] == '+')) pos++;
+        bool isFloat = false;
+        while (pos < src.size() && (isdigit((unsigned char)src[pos]) || src[pos] == '.' || src[pos] == 'e' || src[pos] == 'E' || src[pos] == '+' || src[pos] == '-')) {
+            if (src[pos] == '.' || src[pos] == 'e' || src[pos] == 'E') isFloat = true;
+            pos++;
+        }
+        if (pos == start) throw std::runtime_error("json.parse: unexpected character '" + std::string(1, src[pos]) + "' at offset " + std::to_string(pos));
+        std::string numStr = src.substr(start, pos - start);
+        try {
+            if (isFloat) return FValue::floating(std::stod(numStr));
+            size_t idx = 0;
+            long long i = std::stoll(numStr, &idx);
+            return FValue::integer(i);
+        } catch (const std::exception&) {
+            throw std::runtime_error("json.parse: invalid number '" + numStr + "'");
+        }
+    }
+
+    std::string parseString() {
+        if (src[pos] != '"') throw std::runtime_error("json.parse: expected string at offset " + std::to_string(pos));
+        pos++;
+        std::string out;
+        while (pos < src.size()) {
+            char c = src[pos];
+            if (c == '"') { pos++; return out; }
+            if (c == '\\') {
+                pos++;
+                if (pos >= src.size()) throw std::runtime_error("json.parse: unterminated escape sequence");
+                char esc = src[pos];
+                switch (esc) {
+                    case '"': out += '"'; pos++; break;
+                    case '\\': out += '\\'; pos++; break;
+                    case '/': out += '/'; pos++; break;
+                    case 'b': out += '\b'; pos++; break;
+                    case 'f': out += '\f'; pos++; break;
+                    case 'n': out += '\n'; pos++; break;
+                    case 'r': out += '\r'; pos++; break;
+                    case 't': out += '\t'; pos++; break;
+                    case 'u': {
+                        if (pos + 4 >= src.size()) throw std::runtime_error("json.parse: invalid \\u escape");
+                        std::string hex = src.substr(pos + 1, 4);
+                        for (char h : hex) if (!isxdigit((unsigned char)h)) throw std::runtime_error("json.parse: invalid \\u escape '" + hex + "'");
+                        unsigned int code = (unsigned int)std::stoul(hex, nullptr, 16);
+                        // UTF-8 encode; surrogate pairs become replacement char (simplified)
+                        if (code < 0x80) {
+                            out += (char)code;
+                        } else if (code < 0x800) {
+                            out += (char)(0xC0 | (code >> 6));
+                            out += (char)(0x80 | (code & 0x3F));
+                        } else {
+                            out += (char)(0xE0 | (code >> 12));
+                            out += (char)(0x80 | ((code >> 6) & 0x3F));
+                            out += (char)(0x80 | (code & 0x3F));
+                        }
+                        pos += 5;
+                        break;
+                    }
+                    default:
+                        throw std::runtime_error(std::string("json.parse: invalid escape '\\") + esc + "'");
+                }
+            } else {
+                out += c;
+                pos++;
+            }
+        }
+        throw std::runtime_error("json.parse: unterminated string");
+    }
+
+    FValue parseObject() {
+        auto* map = vm->gc().newObj<GCMap>();
+        pos++; // consume '{'
+        skipWs();
+        if (pos < src.size() && src[pos] == '}') { pos++; return FValue::obj(map); }
+        while (true) {
+            skipWs();
+            if (pos >= src.size() || src[pos] != '"') throw std::runtime_error("json.parse: expected object key at offset " + std::to_string(pos));
+            std::string key = parseString();
+            skipWs();
+            if (pos >= src.size() || src[pos] != ':') throw std::runtime_error("json.parse: expected ':' after key at offset " + std::to_string(pos));
+            pos++;
+            map->entries[key] = parseValue();
+            skipWs();
+            if (pos < src.size() && src[pos] == ',') { pos++; continue; }
+            if (pos < src.size() && src[pos] == '}') { pos++; return FValue::obj(map); }
+            throw std::runtime_error("json.parse: expected ',' or '}' at offset " + std::to_string(pos));
+        }
+    }
+
+    FValue parseArray() {
+        auto* arr = vm->gc().newObj<GCArray>();
+        pos++; // consume '['
+        skipWs();
+        if (pos < src.size() && src[pos] == ']') { pos++; return FValue::obj(arr); }
+        while (true) {
+            arr->elements.push_back(parseValue());
+            skipWs();
+            if (pos < src.size() && src[pos] == ',') { pos++; continue; }
+            if (pos < src.size() && src[pos] == ']') { pos++; return FValue::obj(arr); }
+            throw std::runtime_error("json.parse: expected ',' or ']' at offset " + std::to_string(pos));
+        }
+    }
+};
+
+} // namespace
+
 void ForgeVM::defineModules() {
     {
         auto* ioMod = new GCMap();
@@ -1674,14 +2016,16 @@ void ForgeVM::defineModules() {
         osMod->entries["time"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
             return FValue::integer((long long)std::time(nullptr));
         }, "os.time"));
-        osMod->entries["execute"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+        osMod->entries["execute"] = FValue::obj(new GCNative([this](const std::vector<FValue>& args) -> FValue {
             if (args.size() != 1) throw std::runtime_error("os.execute() expects 1 argument");
+            if (!isTrusted()) throw std::runtime_error("os.execute() requires trusted mode (run with --trusted)");
             std::string cmd = args[0].asString()->value;
             int result = std::system(cmd.c_str());
             return FValue::integer((long long)result);
         }, "os.execute"));
-        osMod->entries["capture"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+        osMod->entries["capture"] = FValue::obj(new GCNative([this](const std::vector<FValue>& args) -> FValue {
             if (args.size() != 1) throw std::runtime_error("os.capture() expects 1 argument");
+            if (!isTrusted()) throw std::runtime_error("os.capture() requires trusted mode (run with --trusted)");
             std::string cmd = args[0].asString()->value;
             std::string output;
             FILE* pipe = popen((cmd + " 2>/dev/null").c_str(), "r");
@@ -1708,9 +2052,14 @@ void ForgeVM::defineModules() {
             if (args.size() != 1) throw std::runtime_error("json.stringify() expects 1 argument");
             return FValue::obj(new GCString(args[0].toString()));
         }, "json.stringify"));
-        jsonMod->entries["parse"] = FValue::obj(new GCNative([](const std::vector<FValue>& args) -> FValue {
+        jsonMod->entries["parse"] = FValue::obj(new GCNative([this](const std::vector<FValue>& args) -> FValue {
             if (args.size() != 1) throw std::runtime_error("json.parse() expects 1 argument");
-            return FValue::nil();
+            if (!args[0].isString()) throw std::runtime_error("json.parse() expects a string argument");
+            JsonParser parser(args[0].asString()->value, this);
+            FValue result = parser.parseValue();
+            parser.skipWs();
+            if (parser.pos < parser.src.size()) throw std::runtime_error("json.parse: trailing characters after JSON value at offset " + std::to_string(parser.pos));
+            return result;
         }, "json.parse"));
         modules_["json"] = FValue::obj(jsonMod);
     }

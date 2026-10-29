@@ -2111,7 +2111,7 @@ void defineLLMModule(::forge::fvm::ForgeVM& vm) {
     // nh2coder.create(config?) -> creates NH-2-Coder
     llmMod->entries["nh2coder_create"] = ::forge::fvm::FValue::obj(new ::forge::fvm::GCNative([](const std::vector<::forge::fvm::FValue>& args) -> ::forge::fvm::FValue {
         forge::llm::NH2CoderConfig cfg;
-        if (args.size() >= 1 && args[0].asString()) {
+        if (args.size() >= 1 && args[0].isString()) {
             std::string preset = argStr(args, 0, "llm");
             if (preset == "tiny") cfg = forge::llm::NH2CoderConfig::tiny();
         }

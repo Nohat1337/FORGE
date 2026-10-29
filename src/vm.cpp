@@ -9,6 +9,10 @@
 #include <fstream>
 #include <ctime>
 
+
+
+
+
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -548,6 +552,8 @@ void VM::defineModules() {
         }, "os.time"));
         osMod->entries["execute"] = Value::obj(std::make_shared<ObjNative>([](const std::vector<Value>& args) -> Value {
             if (args.size() != 1) throw std::runtime_error("os.execute() expects 1 argument");
+            if (!VM::g_vmTrustedFlag)
+                throw std::runtime_error("os.execute() requires trusted mode (run with --trusted)");
             std::string cmd = args[0].asString()->value;
             int result = std::system(cmd.c_str());
             return Value::integer((long long)result);
@@ -1110,7 +1116,7 @@ bool VM::interpret(std::shared_ptr<ObjFunction> function) {
                     long long i = 0;
                     if (obj.isArray() || obj.isString()) {
                         if (!indexOperand(idx, &i)) {
-                            if (!handleError("Index must be an integer (got " +
+                            if (!handleError(std::string("Index must be an integer (got ") +
                                 (idx.isString() ? "string" : idx.type == ValueType::VAL_NIL ? "nil" : "value") + ")")) return false;
                             break;
                         }

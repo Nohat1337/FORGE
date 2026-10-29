@@ -1,0 +1,8 @@
+path: examples/simple.fclass
+djb2: c76aedea
+structural_hash: c76aedea000000000000007e
+size: 126
+magic: cafef00d
+class: main
+methods: 1
+constant_pool: 6

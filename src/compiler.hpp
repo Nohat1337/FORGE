@@ -42,6 +42,7 @@ private:
     std::vector<CompilerState*> compilerStack_;
     CompilerState* current_ = nullptr;
     ClassCompilerState* currentClass_ = nullptr;
+    uint64_t nextMatchId_ = 0; // unique suffix for match helper globals
 
     struct LoopState {
         int loopStart = 0;

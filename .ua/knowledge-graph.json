@@ -1,0 +1,49 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "FORGE",
+    "languages": ["C++", "C"],
+    "frameworks": [],
+    "description": "Forge language toolchain - compiler, VM (FVM), FFI, native libraries, Android Liquid Glass UI, cross-platform transpilers",
+    "analyzedAt": "2025-10-28T00:00:00Z",
+    "gitCommitHash": "d45013680607d02eb6c30dcd82c01a77cd579d06"
+  },
+  "nodes": [
+    {"id": "file:src/main.cpp", "type": "file", "name": "main.cpp", "filePath": "src/main.cpp", "summary": "Forge interpreter CLI entry point", "tags": ["cli", "interpreter"], "complexity": "moderate"},
+    {"id": "file:src/forgevm_main.cpp", "type": "file", "name": "forgevm_main.cpp", "filePath": "src/forgevm_main.cpp", "summary": "FVM CLI with build, lib, android, FFI commands", "tags": ["cli", "vm", "fvm"], "complexity": "moderate"},
+    {"id": "file:src/fvm/runtime.cpp", "type": "file", "name": "runtime.cpp", "filePath": "src/fvm/runtime.cpp", "summary": "Forge Virtual Machine runtime", "tags": ["vm", "runtime"], "complexity": "high"},
+    {"id": "file:src/fvm/ffi.cpp", "type": "file", "name": "ffi.cpp", "filePath": "src/fvm/ffi.cpp", "summary": "FFI for native library interop", "tags": ["ffi", "interop"], "complexity": "high"},
+    {"id": "file:src/forge_build.cpp", "type": "file", "name": "forge_build.cpp", "filePath": "src/forge_build.cpp", "summary": "Build system for ForgeLists.txt, supports --shared export", "tags": ["build", "export"], "complexity": "high"},
+    {"id": "file:src/fvm/forge_export.cpp", "type": "file", "name": "forge_export.cpp", "filePath": "src/fvm/forge_export.cpp", "summary": "C ABI export for Forge shared libraries", "tags": ["export", "abi"], "complexity": "moderate"},
+    {"id": "file:src/fvm/gui_kit.cpp", "type": "file", "name": "gui_kit.cpp", "filePath": "src/fvm/gui_kit.cpp", "summary": "GUI toolkit with Liquid Glass support", "tags": ["gui", "ui"], "complexity": "high"},
+    {"id": "file:src/android_cmd.cpp", "type": "file", "name": "android_cmd.cpp", "filePath": "src/android_cmd.cpp", "summary": "Android app generation and build", "tags": ["android", "build"], "complexity": "high"},
+    {"id": "file:src/lsp/forge_lsp.cpp", "type": "file", "name": "forge_lsp.cpp", "filePath": "src/lsp/forge_lsp.cpp", "summary": "Language Server Protocol implementation", "tags": ["lsp", "editor"], "complexity": "high"},
+    {"id": "file:CMakeLists.txt", "type": "config", "name": "CMakeLists.txt", "filePath": "CMakeLists.txt", "summary": "Main CMake build configuration", "tags": ["build"], "complexity": "moderate"},
+    {"id": "file:tools/c2forge.cpp", "type": "file", "name": "c2forge.cpp", "filePath": "tools/c2forge.cpp", "summary": "C/C++ to Forge translator", "tags": ["tool", "transpiler"], "complexity": "moderate"},
+    {"id": "file:tools/forge2c.cpp", "type": "file", "name": "forge2c.cpp", "filePath": "tools/forge2c.cpp", "summary": "Forge to C/C++ translator", "tags": ["tool", "transpiler"], "complexity": "moderate"},
+    {"id": "file:tools/forge_rebuild_engine.cpp", "type": "file", "name": "forge_rebuild_engine.cpp", "filePath": "tools/forge_rebuild_engine.cpp", "summary": "Cross-platform app rebuild engine", "tags": ["tool", "rebuild"], "complexity": "moderate"},
+    {"id": "file:tools/cfmake.cpp", "type": "file", "name": "cfmake.cpp", "filePath": "tools/cfmake.cpp", "summary": "Cross-Forge Make configurator", "tags": ["tool", "build"], "complexity": "moderate"}
+  ],
+  "edges": [
+    {"source": "file:src/forgevm_main.cpp", "target": "file:src/fvm/runtime.cpp", "type": "imports"},
+    {"source": "file:src/forgevm_main.cpp", "target": "file:src/fvm/ffi.cpp", "type": "imports"},
+    {"source": "file:src/forgevm_main.cpp", "target": "file:src/forge_build.cpp", "type": "imports"},
+    {"source": "file:src/forgevm_main.cpp", "target": "file:src/android_cmd.cpp", "type": "imports"},
+    {"source": "file:src/forge_build.cpp", "target": "file:src/fvm/forge_export.cpp", "type": "imports"},
+    {"source": "file:src/fvm/runtime.cpp", "target": "file:src/fvm/gui_kit.cpp", "type": "imports"}
+  ],
+  "layers": [
+    {"id": "layer:cli", "name": "CLI Layer", "description": "Command-line interfaces", "nodeIds": ["file:src/main.cpp", "file:src/forgevm_main.cpp"]},
+    {"id": "layer:vm", "name": "VM Core", "description": "Virtual machine and runtime", "nodeIds": ["file:src/fvm/runtime.cpp", "file:src/fvm/ffi.cpp"]},
+    {"id": "layer:build", "name": "Build System", "description": "Build and export tools", "nodeIds": ["file:src/forge_build.cpp", "file:src/fvm/forge_export.cpp", "file:CMakeLists.txt"]},
+    {"id": "layer:ui", "name": "UI & Platform", "description": "GUI and Android support", "nodeIds": ["file:src/fvm/gui_kit.cpp", "file:src/android_cmd.cpp"]},
+    {"id": "layer:tools", "name": "Tools & Transpilers", "description": "Developer tools", "nodeIds": ["file:tools/c2forge.cpp", "file:tools/forge2c.cpp", "file:tools/forge_rebuild_engine.cpp", "file:tools/cfmake.cpp", "file:src/lsp/forge_lsp.cpp"]}
+  ],
+  "tour": [
+    {"order": 1, "title": "Project Overview", "description": "Forge is a full-stack language toolchain with compiler, VM, and native interop", "nodeIds": ["file:README.md"]},
+    {"order": 2, "title": "CLI Entry Points", "description": "forge and forgevm are the main CLIs", "nodeIds": ["file:src/main.cpp", "file:src/forgevm_main.cpp"]},
+    {"order": 3, "title": "VM Runtime", "description": "Core execution engine with FFI support", "nodeIds": ["file:src/fvm/runtime.cpp", "file:src/fvm/ffi.cpp"]},
+    {"order": 4, "title": "Build & Export", "description": "Build native binaries and export as C shared libraries", "nodeIds": ["file:src/forge_build.cpp", "file:src/fvm/forge_export.cpp"]},
+    {"order": 5, "title": "Developer Tools", "description": "Transpilers, LSP, and rebuild engine", "nodeIds": ["file:tools/c2forge.cpp", "file:tools/forge2c.cpp", "file:src/lsp/forge_lsp.cpp"]}
+  ]
+}

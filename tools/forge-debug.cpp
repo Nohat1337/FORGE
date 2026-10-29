@@ -159,6 +159,9 @@ int main(int argc, char* argv[]) {
             }
         } else if (arg == "--step") {
             stepMode = true;
+        } else if (arg == "--trusted") {
+            // Enable trusted capabilities (os.execute) for the debug session.
+            VM::g_vmTrustedFlag = true;
         } else if (arg == "--watch" && i + 1 < argc) {
             i++;
             watches.push_back({argv[i]});

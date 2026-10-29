@@ -19,6 +19,7 @@ const std::unordered_map<std::string, TokenType> Lexer::keywords_ = {
     {"throw", TokenType::THROW},
     {"import", TokenType::IMPORT}, {"extern", TokenType::EXTERN},
     {"break", TokenType::BREAK}, {"continue", TokenType::CONTINUE},
+    {"gen", TokenType::GEN}, {"yield", TokenType::YIELD},
 };
 
 Lexer::Lexer(const std::string& source) : source_(source), pos_(0), line_(1), column_(1) {}

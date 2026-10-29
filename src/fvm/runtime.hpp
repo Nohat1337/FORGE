@@ -35,6 +35,8 @@ struct GCMap;
 struct GCClass;
 struct GCInstance;
 struct GCBoundMethod;
+struct FVMTryFrame;
+struct FVMThread;
 
 // ============================================================
 // GC Object types
@@ -42,7 +44,7 @@ struct GCBoundMethod;
 
 enum class GCObjType {
     STRING, FUNCTION, NATIVE, CLOSURE, UPVALUE, ARRAY, MAP,
-    CLASS, INSTANCE, BOUND_METHOD
+    CLASS, INSTANCE, BOUND_METHOD, GENERATOR
 };
 
 struct GCObject {
@@ -129,8 +131,7 @@ struct GCString : GCObject {
 
 struct GCFunction : GCObject {
     Chunk* chunk = nullptr;
-    std::unique_ptr<Chunk> ownedChunk;
-    // Pre-converted FValue view of chunk->constants. Populated once at
+    std::unique_ptr<Chunk> ownedChunk;    // Pre-converted FValue view of chunk->constants. Populated once at
     // function creation so OP_CONSTANT / OP_CLOSURE never re-convert
     // (previously every OP_CONSTANT with a string allocated a fresh
     // GCString, and every OP_CLOSURE deep-copied the whole Chunk).
@@ -138,6 +139,7 @@ struct GCFunction : GCObject {
     int arity = 0;
     int upvalueCount = 0;
     int localCount = 0;
+    bool isGenerator = false;
     std::string name;
     GCFunction() : GCObject(GCObjType::FUNCTION) {}
 };
@@ -198,6 +200,19 @@ struct GCBoundMethod : GCObject {
         : GCObject(GCObjType::BOUND_METHOD), receiver(r), method(m) {}
 };
 
+// Paused generator execution state. Owns a dedicated FVMThread whose stack,
+// frames and ip survive across next() calls.
+struct GCGenerator : GCObject {
+    GCClosure* closure = nullptr;
+    std::unique_ptr<FVMThread> thread;
+    std::vector<FValue> args;   // call arguments (kept for first resume)
+    FValue lastValue;           // most recent yielded value
+    bool started = false;
+    bool done = false;
+    GCGenerator(GCClosure* c) : GCObject(GCObjType::GENERATOR), closure(c) {}
+    ~GCGenerator() override; // out-of-line: FVMThread is incomplete here
+};
+
 struct GCMethod {
     GCClosure* closure = nullptr;
     bool isStatic = false;
@@ -216,6 +231,14 @@ struct FVMFrame {
     int slotCount = 0;
 };
 
+// try/catch frame: records the thread state to restore when an exception
+// unwinds into the matching handler.
+struct FVMTryFrame {
+    int stackSize;
+    int frameCount;
+    int handlerOffset;
+};
+
 struct FVMThread {
     enum class State { NEW, RUNNABLE, BLOCKED, WAITING, TERMINATED };
 
@@ -232,6 +255,11 @@ struct FVMThread {
     std::vector<FValue> stack;
     int stackTop = 0;
 
+    // Per-thread state (previously shared ForgeVM members — interleaved
+    // execution of generator threads corrupted these).
+    std::vector<FVMTryFrame> tryFrames;
+    GCUpvalue* openUpvalues = nullptr;
+
     FVMGC* gc = nullptr;  // Reference to GC for object allocation
 
     FVMFrame& currentFrame() { return frames[frameCount - 1]; }
@@ -241,7 +269,12 @@ struct FVMThread {
     void popFrame(FValue& result);
     bool callValue(const FValue& callee, int argCount);
 
-    void push(const FValue& v) { stack[stackTop++] = v; }
+    void push(const FValue& v) {
+        if (stackTop >= (int)stack.size()) {
+            throw std::runtime_error("Stack overflow: VM value stack exhausted");
+        }
+        stack[stackTop++] = v;
+    }
     FValue pop() { return stack[--stackTop]; }
     FValue& peek(int dist = 0) { return stack[stackTop - 1 - dist]; }
 };
@@ -326,30 +359,30 @@ public:
     void setMaxHeap(size_t max) { maxHeap_ = max; }
 
 private:
-    struct TryFrame {
-        int stackSize;
-        int frameCount;
-        int handlerOffset;
-    };
-    std::vector<TryFrame> tryFrames_;
     FVMGC gc_;
     size_t maxHeap_ = 10000000;
     bool trustedMode_ = false;
+    // Generator currently executing (for OP_YIELD bookkeeping); nested
+    // next() calls save/restore this.
+    GCGenerator* activeGenerator_ = nullptr;
 
     void reset();
     bool runLoop();
+    // Runs the dispatch loop on an arbitrary thread (generators). Sets
+    // *yieldedOut when the loop stopped at OP_YIELD rather than completing.
+    bool runLoopOn(FVMThread& thread, bool* yieldedOut = nullptr);
+    FValue runGenerator(GCGenerator* gen);
     void runtimeError(const std::string& msg);
-    bool handleError(const std::string& msg);
+    bool handleError(FVMThread& thread, const std::string& msg);
     bool call(GCClosure* closure, int argCount);
     bool callValue(const FValue& callee, int argCount);
     void defineBuiltins();
     void defineModules();
     void defineComputeModule();
 
-    void closeUpvalues(FValue* last);
-    GCUpvalue* captureUpvalue(FValue* slot);
+    void closeUpvalues(FVMThread& thread, FValue* last);
+    GCUpvalue* captureUpvalue(FVMThread& thread, FValue* slot);
 
-    GCUpvalue* openUpvalues_ = nullptr;
     std::vector<std::unique_ptr<FVMThread>> threads_;
     std::mutex threadsMutex_;
     size_t nextThreadId_ = 1;

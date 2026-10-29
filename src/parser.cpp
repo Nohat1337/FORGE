@@ -232,6 +232,16 @@ StmtPtr Parser::parseClassDecl() {
     skipNewlines();
     std::vector<FnDecl> methods;
     while (!check(TokenType::RBRACE) && !check(TokenType::EOF_TOKEN)) {
+        // Skip C++/Java style access specifiers like public:, private:, protected:
+        if (check(TokenType::IDENTIFIER)) {
+            std::string val = tokens_[pos_].value;
+            if ((val == "public" || val == "private" || val == "protected") && peekNext().type == TokenType::COLON) {
+                advance(); // consume identifier
+                advance(); // consume colon
+                skipNewlines();
+                continue;
+            }
+        }
         expect(TokenType::FN, "Expected 'fn' for method");
         Token methodName = expect(TokenType::IDENTIFIER, "Expected method name");
         expect(TokenType::LPAREN, "Expected '('");
@@ -271,6 +281,16 @@ StmtPtr Parser::parseImplDecl() {
     skipNewlines();
     std::vector<FnDecl> methods;
     while (!check(TokenType::RBRACE) && !check(TokenType::EOF_TOKEN)) {
+        // Skip C++/Java style access specifiers like public:, private:, protected:
+        if (check(TokenType::IDENTIFIER)) {
+            std::string val = tokens_[pos_].value;
+            if ((val == "public" || val == "private" || val == "protected") && peekNext().type == TokenType::COLON) {
+                advance(); // consume identifier
+                advance(); // consume colon
+                skipNewlines();
+                continue;
+            }
+        }
         expect(TokenType::FN, "Expected 'fn' for method");
         Token methodName = expect(TokenType::IDENTIFIER, "Expected method name");
         expect(TokenType::LPAREN, "Expected '('");

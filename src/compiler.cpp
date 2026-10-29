@@ -208,6 +208,14 @@ void Compiler::compileFnDecl(FnDecl& decl) {
     fn->name = decl.name;
     fn->arity = (int)decl.params.size();
 
+    // Nested function declarations: reserve the local slot in the enclosing
+    // scope BEFORE compiling the body so that the name resolves (and
+    // recursion/upvalue capture works). OP_CLOSURE then lands exactly in
+    // this slot, matching the local-decl stack discipline.
+    if (current_->scopeDepth > 0) {
+        addLocal(decl.name, false);
+    }
+
     auto* prev = current_;
     pushCompiler(fn);
     current_->function->arity = fn->arity;
@@ -842,11 +850,16 @@ void Compiler::compileStringInterp(StringInterpExpr& e) {
 }
 
 void Compiler::compileMatchExpr(MatchExpr& e) {
-    int savedLocalsCount = (int)current_->locals.size();
+    // The matched value is stored in a uniquely-named global rather than a
+    // local: local slots assume the value stack matches the locals vector,
+    // which breaks when the match expression is nested inside another
+    // expression (e.g. print(match x {...})). '#' cannot appear in Forge
+    // identifiers, so user code cannot collide with these names.
+    uint16_t matchIdx = addConstant(Value::obj(std::make_shared<ObjString>(
+        "_forge#match#val#" + std::to_string(nextMatchId_++))));
 
     compileExpression(e.value);
-    addLocal("_match_val", true);
-    int matchSlot = (int)current_->locals.size() - 1;
+    emitOpOperand16(OP_DEFINE_GLOBAL, matchIdx);
 
     std::vector<int> endJumps;
 
@@ -869,21 +882,16 @@ void Compiler::compileMatchExpr(MatchExpr& e) {
         };
 
         if (mc.pattern.type == MatchPattern::WILDCARD) {
-            emitOpOperand16(OP_GET_LOCAL, (uint16_t)matchSlot);
-            int varSlot = addLocal("_wildcard", false);
-            emitOpOperand16(OP_SET_LOCAL, (uint16_t)varSlot);
-            emitOp(OP_POP);
             compileBody(mc.body);
             break;
         } else if (mc.pattern.type == MatchPattern::IDENTIFIER) {
-            emitOpOperand16(OP_GET_LOCAL, (uint16_t)matchSlot);
-            int varSlot = addLocal(mc.pattern.name, false);
-            emitOpOperand16(OP_SET_LOCAL, (uint16_t)varSlot);
-            emitOp(OP_POP);
+            uint16_t bindIdx = addConstant(Value::obj(std::make_shared<ObjString>(mc.pattern.name)));
+            emitOpOperand16(OP_GET_GLOBAL, matchIdx);
+            emitOpOperand16(OP_DEFINE_GLOBAL, bindIdx);
             compileBody(mc.body);
             break;
         } else {
-            emitOpOperand16(OP_GET_LOCAL, (uint16_t)matchSlot);
+            emitOpOperand16(OP_GET_GLOBAL, matchIdx);
             compileExpression(mc.pattern.literal);
             emitOp(OP_EQUAL);
             int jumpElse = emitJump(OP_JUMP_IF_FALSE);
@@ -898,7 +906,6 @@ void Compiler::compileMatchExpr(MatchExpr& e) {
     }
 
     for (int j : endJumps) patchJump(j);
-    current_->locals.resize(savedLocalsCount);
 }
 
 void Compiler::compileThrowExpr(ThrowExpr& e) {
