@@ -1,8 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/home/nohat1337/c++-fork/build-release/cmake_install.cmake",
-		"/home/nohat1337/c++-fork/build-release/tools/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

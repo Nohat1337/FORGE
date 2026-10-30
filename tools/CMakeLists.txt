@@ -22,3 +22,20 @@ endif()
 # LSP Server
 add_executable(forge-lsp ../src/lsp/forge_lsp_main.cpp ../src/lsp/forge_lsp.cpp ${TOOL_SOURCES})
 target_include_directories(forge-lsp PRIVATE ../src)
+
+# CFMAKE - CMake-like build configurator & runner (single-file Forgefile)
+add_executable(cfmake cfmake.cpp)
+if(UNIX AND NOT APPLE)
+    target_link_libraries(cfmake PRIVATE stdc++fs)
+endif()
+
+# .fclass decompilers
+add_executable(forge-decompiler forge_decompiler.cpp ../src/fvm/classfile.cpp)
+target_include_directories(forge-decompiler PRIVATE ..)
+
+add_executable(forge-fclass-decompiler forge_fclass_decompiler.cpp ../src/fvm/classfile.cpp)
+target_include_directories(forge-fclass-decompiler PRIVATE ../src)
+
+# Transpilers (rough, manual review required)
+add_executable(c2forge c2forge.cpp)
+add_executable(forge2c forge2c.cpp)

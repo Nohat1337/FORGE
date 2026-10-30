@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include <regex>
+#include <filesystem>
 
 std::string readFile(const std::string& path) {
     std::ifstream f(path);
@@ -91,5 +92,18 @@ int main(int argc, char** argv) {
     out << translated;
     
     std::cout << "[forge2c] " << input << " -> " << output << "\n";
+
+    // Vice versa: if the single project file exists and still tracks this
+    // component, note the companion C translation right next to it.
+    std::string projectFile;
+    if (std::filesystem::exists("Forgefile")) projectFile = "Forgefile";
+    else if (std::filesystem::exists("ForgeLists.txt")) projectFile = "ForgeLists.txt";
+    if (!projectFile.empty()) {
+        std::ofstream pf(projectFile, std::ios::app);
+        pf << "# companion C exported by forge2c: " << output << " (hand-tune)\n";
+        pf.close();
+        std::cout << "[forge2c] Noted in " << projectFile << "\n";
+    }
+
     return 0;
 }

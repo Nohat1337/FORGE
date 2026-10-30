@@ -8,6 +8,7 @@
 #include <vector>
 #include <regex>
 #include <algorithm>
+#include <filesystem>
 
 std::string readFile(const std::string& path) {
     std::ifstream f(path);
@@ -74,15 +75,15 @@ int main(int argc, char** argv) {
         std::cout << "       c2forge --dir <directory>\n";
         return 1;
     }
-    
+
     std::string input = argv[1];
     std::string output;
-    
+
     if (input == "--dir") {
         std::cout << "[c2forge] Directory mode not fully implemented yet\n";
         return 0;
     }
-    
+
     if (argc >= 3) {
         output = argv[2];
     } else {
@@ -93,24 +94,42 @@ int main(int argc, char** argv) {
             output = input + ".fge";
         }
     }
-    
+
     std::string code = readFile(input);
     if (code.empty()) {
         std::cerr << "[c2forge] Error: Cannot read " << input << "\n";
         return 1;
     }
-    
+
     std::string translated = translate(code);
-    
+
     std::ofstream out(output);
     if (!out) {
         std::cerr << "[c2forge] Error: Cannot write " << output << "\n";
         return 1;
     }
     out << translated;
-    
+
     std::cout << "[c2forge] " << input << " -> " << output << "\n";
     std::cout << "[c2forge] Note: Manual review and adjustment required\n";
-    
+
+    // Vice versa: register the new component in the single project file
+    // (Forgefile preferred; legacy ForgeLists.txt created by CFMAKE also works).
+    std::string projectFile;
+    if (std::filesystem::exists("Forgefile")) projectFile = "Forgefile";
+    else if (std::filesystem::exists("ForgeLists.txt")) projectFile = "ForgeLists.txt";
+    if (!projectFile.empty()) {
+        std::ifstream pf(projectFile);
+        std::string contents((std::istreambuf_iterator<char>(pf)), std::istreambuf_iterator<char>());
+        pf.close();
+        if (contents.find("component(" + output + ")") == std::string::npos &&
+            contents.find("file(" + output + ")") == std::string::npos) {
+            std::ofstream pf2(projectFile, std::ios::app);
+            pf2 << "\n# added by c2forge (hand-tune)\ncomponent(" << output << ")\n";
+            pf2.close();
+            std::cout << "[c2forge] Registered in " << projectFile << ": component(" << output << ")\n";
+        }
+    }
+
     return 0;
 }
